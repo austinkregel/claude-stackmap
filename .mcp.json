@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "stackmap": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/scripts/launch.sh"
+    }
+  }
+}

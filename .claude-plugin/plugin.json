@@ -1,0 +1,8 @@
+{
+  "name": "stackmap",
+  "displayName": "Stackmap",
+  "description": "Deterministic code-structure lookups \u2014 resolve an interface to its implementation and file without reading service providers.",
+  "version": "0.1.0",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json"
+}

@@ -1,0 +1,12 @@
+#!/bin/sh
+# stackmap CLI. On PATH whenever the plugin is enabled.
+# Replaces hand-retyped data one-liners, which drop rows silently when a filter misses or a
+# parse error goes unreported. Every command here reports its counts instead.
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+. "$ROOT/scripts/find-node.sh"
+if ! NODE=$(find_node); then
+  echo "sm: no usable node binary found. Install Node 18+." >&2
+  exit 127
+fi
+exec "$NODE" "$ROOT/scripts/cli/main.mjs" "$@"

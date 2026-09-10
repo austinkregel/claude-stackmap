@@ -1,0 +1,42 @@
+{
+  "defaultIndex": "my-app",
+  "globalExclude": [
+    "vendor",
+    "node_modules",
+    "_build",
+    "deps",
+    ".git",
+    "storage",
+    "dist",
+    "build"
+  ],
+  "indexes": [
+    {
+      "name": "my-app",
+      "root": "~/src/my-app",
+      "adapter": "laravel",
+      "include": [
+        "app"
+      ],
+      "exclude": [],
+      "options": {},
+      "enabled": true
+    },
+    {
+      "name": "legacy-app",
+      "root": "~/src/legacy-app",
+      "adapter": "auto",
+      "enabled": false
+    }
+  ],
+  "guard": {
+    "enabled": true,
+    "protectedBranches": [
+      "develop",
+      "main",
+      "master"
+    ],
+    "allowMerge": false
+  },
+  "notesDir": "~/.config/stackmap/notes"
+}
