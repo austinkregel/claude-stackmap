@@ -10,7 +10,7 @@ repo, each with a different runtime and different failure semantics:
 | Surface | Entry point | Runs from | Needs a build? |
 |---|---|---|---|
 | MCP server (`stackmap_*`, `note_*` tools) | `scripts/launch.sh` → `dist/index.js` | compiled TS | **yes** |
-| Hooks (guard, freshness, fetch sanity, review arm/check) | `hooks/hooks.json` → `scripts/*.sh` → `scripts/*.mjs` | plain `.mjs`, never `dist/` | no |
+| Hooks (guards, house rules, freshness, fetch sanity, review arm/check) | `hooks/hooks.json` → `scripts/*.sh` → `scripts/*.mjs` | plain `.mjs`, never `dist/` | no |
 | `sm` CLI | `bin/sm` → `scripts/cli/main.mjs` | plain `.mjs` | no |
 | Skills | `skills/*/SKILL.md` | markdown | no |
 
@@ -26,19 +26,27 @@ npm install
 npm run build          # tsc -> dist/  (required before the MCP server or note tests will run)
 npm run check          # typecheck only
 npm run watch          # tsc --watch
-npm test               # guard, extractors, notes, review, smoke  (116 checks)
+npm test               # every suite below, in order
 npm run bench          # note retrieval latency + rank quality at 101/1001/5001 notes
 ```
 
 Run a single suite directly — they are standalone scripts, and there is no test-name filter:
 
 ```bash
-node scripts/guard-test.mjs    # PreToolUse guard, incl. fail-closed paths (no build needed)
-node scripts/extract-test.mjs  # PHP extractors + adapter wiring, inline fixtures  (needs dist/)
-node scripts/notes-test.mjs    # note store: supersession, retraction weighting, drift  (needs dist/)
-node scripts/review-test.mjs   # review arm/check enforcement
-node scripts/smoke.mjs         # boots dist/index.js over stdio, exercises every tool + error paths
+node scripts/shell-tokens-test.mjs  # shell parser the Bash guards evaluate (no build needed)
+node scripts/guard-test.mjs         # destructive commands, commit messages, guard.sh fail-closed paths
+node scripts/truncate-test.mjs      # no-truncate
+node scripts/suppress-test.mjs      # no-suppress + suppression catalog integrity
+node scripts/house-rules-test.mjs   # house rules: extend/replace/disable and every failure path
+node scripts/hooks-test.mjs         # hook-open.sh, freshness, fetch sanity, config.example.json
+node scripts/review-test.mjs        # review arm/check enforcement
+node scripts/extract-test.mjs       # PHP extractors + adapter wiring, inline fixtures  (needs dist/)
+node scripts/notes-test.mjs         # note store: supersession, retraction weighting, drift  (needs dist/)
+node scripts/smoke.mjs              # boots dist/index.js over stdio, exercises every tool + error paths
 ```
+
+The hook suites set `$STACKMAP_CONFIG` and `$STACKMAP_STATE` to temp paths and never touch real
+config or session state. Keep it that way in any new hook test.
 
 Each suite prints `PASS`/`FAIL` per check and exits non-zero if any failed; add a `check(...)` call
 to extend one. `notes-test` and `smoke` import from `dist/`, so **build first** or you test stale
@@ -53,8 +61,10 @@ Resolution order, first hit wins: `$STACKMAP_CONFIG`, `$XDG_CONFIG_HOME/stackmap
 fields. Adding a repo to query is a config edit, never a code change, as long as its stack has an
 adapter. Set `STACKMAP_CONFIG` to a temp file to test config-dependent behaviour in isolation.
 
-Runtime state also lives under `~/.config/stackmap/`: `notes/` (one markdown file per note,
-git-friendly) and `sessions/<id>.review.json` (review-arm markers).
+Notes live under `notesDir` (default `~/.config/stackmap/notes/`, one markdown file per note,
+git-friendly). Per-session hook state (`sessions/<id>.review.json`, review-arm markers) lives in
+`~/.stackmap/`, or under `$STACKMAP_STATE` when set; a relative `$STACKMAP_STATE` is an error.
+`stateDir()` in `scripts/hook-lib.mjs` is the only place that path is resolved.
 
 ## Architecture
 
@@ -69,32 +79,78 @@ wrappers with a bare `node` command in `.mcp.json` or `hooks.json`.
 ### Two-tier hook failure semantics — do not mix them
 
 Claude Code hooks fail **open** by default; exit code 2 is the only code that blocks
-unconditionally.
+unconditionally. Both wrappers take the script name as an argument and accept only
+`[a-z0-9-]+.mjs`, so a name cannot reach outside `scripts/`.
 
-- `scripts/guard.sh` → **fails closed.** Unreadable stdin, malformed JSON, missing script, no
-  node, evaluation error — all exit 2. A guardrail that cannot evaluate must not wave calls
-  through. `guard-test.mjs` asserts these paths, not just the happy ones.
-- `scripts/hook-open.sh` → **fails open.** Wraps the informational hooks (`freshness.mjs`,
-  `fetch-sanity.mjs`, `review-arm.mjs`, `review-check.mjs`); a missing node or parse error exits 0
-  silently rather than blocking a session or a tool result.
+- `scripts/guard.sh <script>` → **fails closed.** Wraps `guard.mjs`, `no-truncate.mjs`,
+  `no-suppress.mjs`. Unreadable stdin, malformed JSON, invalid config, a command the shell would
+  reject, missing script, no node, evaluation error — all exit 2. A guardrail that cannot evaluate
+  must not wave calls through. The suites assert these paths, not just the happy ones.
+- `scripts/hook-open.sh <script>` → **fails open, visibly.** Wraps `freshness.mjs`,
+  `house-rules.mjs`, `fetch-sanity.mjs`, `review-arm.mjs`, `review-check.mjs`. A failure exits 1
+  (non-blocking) with a `systemMessage` for the user. It used to exit 0, which hid failures
+  completely: stderr from a hook that exits 0 goes only to the debug log.
 
-`scripts/guard.mjs` parses its own config instead of importing from `dist/`, on purpose: a broken
-TypeScript build must not be able to disable the safety layer. Keep it dependency-free.
+`scripts/hook-lib.mjs` owns the wire protocol. Its helpers set `process.exitCode` and return;
+never call `process.exit()` after writing a decision, because it can end the process before
+stdout flushes and Claude Code reads that JSON on every exit code. Stop blocks use the documented
+top-level `{ "decision": "block", "reason" }` shape.
+
+The guards read config through `scripts/hook-config.mjs`, not `dist/`, on purpose: a broken
+TypeScript build must not be able to disable the safety layer. Keep it dependency-free. It is the
+only owner of the `guard` and `houseRules` sections (src/config.ts does not model them) and
+validates strictly — an unknown key is an error, so a typo cannot silently fall back to defaults.
+
+A `PreToolUse` hook that times out lets the tool call through (hooks reference), so every entry in
+`hooks.json` sets a short explicit `timeout`; keep guard work bounded.
+
+### Guards evaluate parsed commands, never raw text
+
+`scripts/shell-tokens.mjs` parses a command the way the shell does: quotes, escapes, heredocs,
+`$(…)`/backticks (including inside double quotes and `${…}`), process substitution, subshells,
+`case`, and the command string of `bash -c` / a heredoc fed to a shell. Guards walk its stages
+with `walkStages`. Never add a guard rule that regex-matches the raw command: the line splitter it
+replaced cut `git commit -m "wip; git merge later"` at the quoted `;`, and the quote-stripper in
+trust-and-verify hid `"$(npm test | tail)"`. Syntax the shell would reject throws
+`ShellParseError`, which guards turn into a fail-closed block. Checked against 5,727 real commands,
+the parser rejects none that bash accepts; re-check with a corpus run before loosening or
+tightening its grammar.
 
 ### Precision over breadth is the governing rule for guard rules
 
 A guardrail that fires on ordinary work gets switched off, so rules are narrow and each has a
-regression test for its read-only lookalike:
+regression test for its safe lookalike:
 
 - `git merge` blocks, `git merge-base` does not — the latter is read-only and far more common.
 - `--force` / `-f` block, `--force-with-lease` does not.
 - `rm -rf` is deliberately **not** blocked: it is overwhelmingly aimed at scratch directories.
+- `cmd | tee f | tail` passes (tee first); `cmd | tail | tee f` and `cmd | sort | tee f | tail` block.
+- An iterator's `skip(n)` in Rust or Java is not a skipped test: suppression patterns are scoped by
+  file type in `scripts/suppression-rules.mjs`.
 
-`guard.mjs` splits a command on `\n && || ; |` and evaluates each segment separately, so compound
-commands can't smuggle a blocked verb past a prefix match. Branch detection tries
-`symbolic-ref --short HEAD` before `rev-parse --abbrev-ref HEAD`, because the latter prints
-`HEAD` on an unborn branch and would silently disable the protected-branch rules exactly where
-they matter.
+Branch detection tries `symbolic-ref --short HEAD` before `rev-parse --abbrev-ref HEAD`, because the
+latter prints `HEAD` on an unborn branch and would silently disable the protected-branch rules
+exactly where they matter. A value only known at runtime fails closed only where a rule needs it
+(`git -C "$DIR" status` passes; `git -C "$DIR" commit` needs the branch and blocks).
+
+### The suppression catalog must be editable while its guard runs
+
+Every pattern in `suppression-rules.mjs` is assembled from fragments with `re(...)`, rule ids avoid
+directive text, and test fixtures use `F(...)`. `suppress-test.mjs` asserts that the catalog, the
+guard, and the suite match none of their own rules. A guardrail that blocks its own maintenance is
+a design defect. `no-suppress` blocks only when a rule's match count rises; for `Write`, "before"
+is the file on disk.
+
+### House rules are injected, configurable, and never partial
+
+`house-rules.mjs` runs on SessionStart (every source, including `compact`) and SubagentStart.
+`houseRules.mode` is `extend` (shipped `house-rules/default.md` minus `disable` ids, then `files`)
+or `replace` (`files` only). Every `## ` section in the default needs a `<!-- id: … -->` line
+under its heading; those ids are the public names `disable` refers to, so do not rename one
+casually. A missing/empty file, unknown id, or a total over Claude Code's 10,000-character hook
+output limit injects nothing and reports why — never inject a partial set. The injected text ends
+with an enforcement list generated from the `guard` config; keep that generated, not hand-written,
+so the rules never claim enforcement that is switched off.
 
 ### Review enforcement is a two-hook state machine
 
