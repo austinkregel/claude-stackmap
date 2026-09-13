@@ -36,7 +36,48 @@
       "main",
       "master"
     ],
-    "allowMerge": false
+    "allowMerge": false,
+    "noTruncate": {
+      "enabled": true,
+      "consumers": [
+        "head",
+        "tail",
+        "less",
+        "more",
+        "cut",
+        "grep",
+        "egrep",
+        "rg",
+        "sed",
+        "awk",
+        "Select-Object",
+        "Select-String",
+        "Format-Table",
+        "findstr"
+      ]
+    },
+    "noSuppress": {
+      "enabled": true,
+      "disableCategories": []
+    },
+    "commitMessage": {
+      "enabled": true,
+      "commands": [
+        {
+          "name": "git",
+          "listCommand": [
+            "git",
+            "--list-cmds=main,alias"
+          ]
+        }
+      ]
+    }
+  },
+  "houseRules": {
+    "enabled": true,
+    "mode": "extend",
+    "files": [],
+    "disable": []
   },
   "notesDir": "~/.config/stackmap/notes"
 }
