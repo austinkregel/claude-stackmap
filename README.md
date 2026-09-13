@@ -6,12 +6,12 @@ A Claude Code plugin in four parts.
 |---|---|
 | `stackmap_*` MCP tools | Deterministic code-structure lookups — resolve an interface to its implementation and file without reading service providers |
 | `note_*` MCP tools + `recall` skill | A durable cross-session note store with provenance stamping, so a conclusion outlives the session that reached it |
-| Hooks | A `PreToolUse` action guard, `SessionStart` repo-freshness context, `PostToolUse` fetch sanity, and `Stop` review enforcement |
+| Hooks | Guards against destructive commands, truncated command output, and check-silencing edits; configurable house rules injected into every session and sub-agent; repo-freshness context, fetch sanity, and review enforcement |
 | `sm` CLI | Reusable data commands (`jsonl`, `csv`, `slice`, `wait`, `dupes`) that report their own counts instead of dropping rows quietly |
 
-Run `npm test` for the full suite: **116 checks** across the action guard, the PHP extractors,
-the note store, review enforcement, and the MCP server. `npm run bench` measures retrieval at
-scale.
+Run `npm test` for the full suite, across the shell parser, the guards, house rules, the
+informational hooks, review enforcement, the PHP extractors, the note store, and the MCP server.
+`npm run bench` measures retrieval at scale.
 
 ### Retrieval performance (measured, not asserted)
 
@@ -187,10 +187,18 @@ Two edge flags matter when reading results:
 - `inferredFrom` — the edge was *derived*, not written literally at the call site. Currently only
   from expanding a `foreach` over a class-const array declared in the same file.
 
-## Action guard
+## Guards
 
-A `PreToolUse` hook on `Bash` blocks a narrow set of destructive or hard-to-reverse commands,
-and nothing else.
+Three `PreToolUse` guardrails. Each evaluates the *parsed* command or edit, not raw text, and each
+fails closed.
+
+| Hook | Tool | Blocks |
+|---|---|---|
+| `guard.mjs` | `Bash` | destructive, hard-to-reverse commands, and commit messages that contain a command |
+| `no-truncate.mjs` | `Bash` | a live command's output piped into a truncating filter without `tee` first |
+| `no-suppress.mjs` | `Edit`, `Write`, `NotebookEdit` | an edit that introduces a check-silencing directive |
+
+### Destructive commands and commit messages (`guard.mjs`)
 
 | Rule | Why |
 |---|---|
@@ -199,34 +207,151 @@ and nothing else.
 | force-push (`--force`, `-f`; `--force-with-lease` allowed) | remote history loss |
 | `git reset --hard` | discards uncommitted work |
 | `migrate:fresh` / `:refresh` / `:reset` / `db:wipe` | Drops every table |
-| `DROP TABLE` / `DROP DATABASE` / `TRUNCATE TABLE` | same |
+| `DROP TABLE` / `DROP DATABASE` / `TRUNCATE TABLE` (including in a heredoc fed to a client) | same |
+| a commit message containing `git <subcommand>` | A command inside a commit message is almost always a mis-type: "wip; git merge later" should read "wip; merge later" |
+
+The commit-message rule reads `-m`, `--message`, clustered `-am`, `-F <file>`, and heredoc
+messages (`-m "$(cat <<'EOF' … EOF)"`, `-F - <<EOF`). Subcommand names come from the tool itself
+(`git --list-cmds=main,alias`), so "git is implied" passes while "git remote" does not. It matches
+prose that names a subcommand too ("the git remote"), by design. A message piped in on stdin
+cannot be read, so it fails closed. Text built at runtime (`-m "$MSG"`) is not checked.
+
+### Truncated output (`no-truncate.mjs`)
+
+Not every command is safe to run twice, so a command's output must be captured in full before
+anything cuts it down.
+
+- In a pipeline, if any later stage is a truncating filter, the stage straight after the producer
+  must be `tee`: `cmd 2>&1 | tee out.log | tail` passes; `cmd | tail | tee out.log` and
+  `cmd | sort | tee out.log | tail` do not.
+- A `tee` in a different command does not count: `cmd && tee f | tail` blocks. Reading the saved
+  file afterwards (`cmd | tee f && tail f`) passes.
+- A filter reading a process substitution (`tail <(cmd)`) blocks.
+- Filters on files (`grep x file`, `tail -50 build.log`) pass.
+- `wc`, `sort`, and `jq` are not truncating filters. The list is `guard.noTruncate.consumers`.
+
+Run over 5,727 distinct Bash commands from real Claude Code transcripts, it blocked 2,435. All but
+one name a pipe (or process substitution) into one of those filters; the remaining one is a
+command that bash and zsh both reject as a syntax error.
+
+### Check-silencing edits (`no-suppress.mjs`)
+
+Dead code is deleted, not annotated; a failing check is fixed, not silenced. The catalog in
+`scripts/suppression-rules.mjs` covers inline directives for JS/TS, Python, Rust, Go, JVM, C#,
+C/C++, Swift, PHP, Ruby, Elixir, shell, and CSS, plus config-level relaxations (`tsconfig`
+strictness and unused checks, ESLint rules set to off/warn, ruff/flake8/pylint/mypy ignores, pytest
+deselects, Cargo lint levels, phpstan `ignoreErrors`, psalm error levels, golangci, rubocop,
+swiftlint, phpunit/jest/vitest exclusions, GitHub Actions `continue-on-error`) and hook bypasses.
+
+| Category | Example |
+|---|---|
+| `lint` | a linter told to ignore a line or rule |
+| `type` | a type checker told to ignore code, or strictness turned off |
+| `test-skip` | a skipped, focused (`.only`), or excluded test |
+| `coverage` | code excluded from coverage |
+| `dead-code` | unused-code diagnostics silenced (`[[maybe_unused]]`, `noUnusedLocals: false`) |
+| `hook-bypass` | commit hooks bypassed |
+| `ci` | a CI step allowed to fail |
+
+Only an edit that *introduces* a directive blocks: per rule, the match count after the edit may not
+exceed the count before. For `Write`, "before" is the file on disk, so rewriting a file that
+already carries a directive passes, while adding a second, different directive does not. Patterns
+are scoped to file types, so an iterator's `skip(n)` in Rust or Java is not a skipped test.
+Notebook cells use the notebook's declared language; with none declared, every inline rule applies.
 
 ### Precision over breadth
 
-`git merge-base` is read-only and far more common in ordinary work than a real merge. A blunt
-`Bash(git merge*)` rule blocks the safe verb, and a guardrail that fires on ordinary work gets
-switched off. The merge rule therefore excludes `merge-base`, and there is a regression test for
-exactly that.
+A guardrail that fires on ordinary work gets switched off, so every allowance is pinned by a test:
 
-`rm -rf` is deliberately **not** blocked. It is overwhelmingly aimed at scratch directories, so
-blocking it would be constant friction for no matching payoff.
+- `git merge-base` is read-only and far more common than a real merge, so the merge rule excludes it.
+- `rm -rf` is deliberately **not** blocked. It is overwhelmingly aimed at scratch directories.
+- Quoted text is data: `echo "wip; git merge later"` is an echo, not a merge.
+- Commands inside `$(…)`, backticks, `${x:-$(…)}`, unquoted heredoc bodies, and `bash -c '…'` are
+  still commands, even inside double quotes.
 
-### It fails closed
+The shell parser (`scripts/shell-tokens.mjs`) was checked against the same 5,727 real commands: it
+rejects none that bash accepts.
 
-Hooks fail *open* by default — a crash, timeout, or malformed JSON lets the call proceed, so a
-broken guardrail silently permits what it exists to prevent. Exit code 2 is the only code that
-blocks unconditionally, so every internal failure path here exits 2: unreadable stdin, malformed
-JSON, a missing script, no usable node, an evaluation error. `npm run guard-test` asserts those
-paths, not just the happy ones.
+### They fail closed
 
-The guard reads its config directly rather than importing from `dist/`, so a broken TypeScript
-build cannot disable the safety layer.
+Hooks fail *open* by default — a crash or malformed JSON lets the call proceed, so a broken
+guardrail silently permits what it exists to prevent. Exit code 2 is the only code that blocks
+unconditionally, so every path that cannot evaluate a call exits 2: unreadable stdin, malformed
+JSON, invalid config (including a misspelled key), a command the shell would reject, a filter or
+git subcommand only known at runtime, a missing script, no usable node. The test suites assert
+those paths, not just the happy ones.
+
+`scripts/guard.sh <script.mjs>` wraps every guardrail. It accepts only `[a-z0-9-]+.mjs` names, so
+an argument cannot run a file outside `scripts/`. The guards parse their config directly
+(`scripts/hook-config.mjs`) rather than importing from `dist/`, so a broken TypeScript build cannot
+disable them.
+
+A **timeout** is the one failure that still lets a call through: per the hooks reference, a
+`PreToolUse` command hook cancelled at its `timeout` lets the tool call continue. Every hook entry
+sets an explicit, short timeout (the default is 600 seconds).
 
 ### Configuration
 
 ```json
-"guard": { "enabled": true, "protectedBranches": ["develop", "main", "master"], "allowMerge": false }
+"guard": {
+  "enabled": true,
+  "protectedBranches": ["develop", "main", "master"],
+  "allowMerge": false,
+  "noTruncate": { "enabled": true, "consumers": ["head", "tail", "less", "more", "cut", "grep", "egrep", "rg", "sed", "awk", "Select-Object", "Select-String", "Format-Table", "findstr"] },
+  "noSuppress": { "enabled": true, "disableCategories": [] },
+  "commitMessage": { "enabled": true, "commands": [{ "name": "git", "listCommand": ["git", "--list-cmds=main,alias"] }] }
+}
 ```
+
+| Key | Meaning |
+|---|---|
+| `enabled` | the destructive-command rules in `guard.mjs` |
+| `noTruncate.consumers` | programs treated as truncating filters |
+| `noSuppress.disableCategories` | catalog categories not enforced |
+| `commitMessage.commands` | tools whose subcommands may not appear in a commit message; each entry has `subcommands` (a list) or `listCommand` (argv that prints them) |
+
+In the `guard` and `houseRules` sections, unknown keys, wrong types, and unknown category names are
+errors, not silent no-ops.
+
+## House rules
+
+A `SessionStart` and `SubagentStart` hook injects a working agreement into Claude's context: at
+startup, resume, clear, fork, and after compaction, and into every sub-agent.
+
+The shipped default (`house-rules/default.md`) covers asking instead of assuming, proving instead
+of guessing, verifying before claiming, failing loudly, never narrowing a check to get green, root
+causes over band-aids, reusing what exists, planning, never truncating output, sub-agent
+briefings, commits, and keeping docs current. The injected text ends with a list, generated from
+the `guard` config, of which rules the hooks enforce — so turning a guard off never leaves text
+claiming it is enforced.
+
+```json
+"houseRules": { "enabled": true, "mode": "extend", "files": [], "disable": [] }
+```
+
+| Key | Meaning |
+|---|---|
+| `mode` | `extend`: the default ruleset, then `files`. `replace`: only `files`. |
+| `files` | Markdown rule files, injected in order. Absolute or `~/` paths; an organisation can point at a shared checkout. |
+| `disable` | default section ids to drop (`extend` only): `ask`, `prove`, `verify`, `no-fallbacks`, `no-narrowing`, `root-cause`, `reuse`, `plan`, `command-output`, `sub-agents`, `commits`, `write-it-down` |
+
+If a configured file is missing, unreadable, or empty, a `disable` id is unknown, or the total
+exceeds Claude Code's 10,000-character limit for hook output, **nothing** is injected and the user
+is shown why. A partial rule set would read as the complete one, and an oversize one would be
+replaced by a preview the model would not notice.
+
+## Informational hooks
+
+`freshness` (SessionStart), `house-rules`, `fetch-sanity` (PostToolUse), and `review-arm` /
+`review-check` (UserPromptSubmit / Stop) run through `scripts/hook-open.sh <script.mjs>` and fail
+**open**: a failure never blocks a session, prompt, tool result, or turn. It is never silent
+either. Stderr from a hook that exits 0 goes only to the debug log, so a failure instead exits 1 and
+carries a `systemMessage` for the user. A `git fetch` that fails at session start is stated in the
+freshness context rather than presenting stale ahead/behind counts as verified.
+
+Per-session state (review markers) lives in `~/.stackmap/sessions`, or under `$STACKMAP_STATE`
+when set (it must be absolute). The test suites point `$STACKMAP_STATE` and `$STACKMAP_CONFIG` at
+temp directories, so running them never touches real files.
 
 ### Second layer
 
@@ -264,15 +389,34 @@ parsing, where a prefix rule can't tell `git merge` from `git merge-base` or han
 - Results describe the working tree as it is on disk right now. There is no cache to invalidate
   between calls, but the adapter memoizes within a single server process; restart or call
   `stackmap_indexes` to rebuild.
+- **Guards see the command, not what it runs.** `eval` strings, aliases, shell functions, scripts
+  on disk, and zsh-only syntax (glob qualifiers) are not followed. A program whose name is built at
+  runtime is not recognised by the destructive-command rules, and a refspec built at runtime
+  (`git push origin "$BRANCH"`) is not checked against protected branches.
+- **Edit hooks see edits, not shell writes.** A directive written with `sed -i` or `cat >` is not
+  seen by `no-suppress`. Pest's `->skip()` chain is not matched, because Laravel collections share
+  the method name.
+- **A hook's `systemMessage` is verified to reach Claude Code, not verified on screen.** In a
+  headless run a failing informational hook is recorded as `exit_code: 1, outcome: "error"` with its
+  message; how the interactive transcript renders it was not checked.
 
 ## Development
 
 ```bash
-npm run check         # typecheck only
-npm run build         # compile to dist/
-npm run extract-test  # PHP extractors + adapter wiring, on self-contained fixtures
-npm run smoke         # end-to-end test over stdio, including failure paths
+npm run check              # typecheck only
+npm run build              # compile to dist/
+npm run shell-tokens-test  # the shell parser the Bash guards evaluate
+npm run guard-test         # destructive-command and commit-message rules, guard.sh
+npm run truncate-test      # no-truncate
+npm run suppress-test      # no-suppress and the suppression catalog
+npm run house-rules-test   # house rules: extend/replace/disable, and every failure path
+npm run hooks-test         # hook-open.sh, freshness, fetch sanity, config.example.json
+npm run review-test        # review arm/check
+npm run extract-test       # PHP extractors + adapter wiring, on self-contained fixtures
+npm run smoke              # end-to-end test over stdio, including failure paths
 ```
+
+The hook suites need no build and use temporary config and state directories.
 
 `npm run extract-test` needs no configured repo — every case is an inline PHP fixture, each one
 grounded in a defect found by running against a real 2,770-file codebase.
@@ -298,6 +442,18 @@ src/
   adapters/laravel.ts  Laravel adapter
   adapters/registry.ts stack detection and adapter caching
   adapters/walk.ts     directory walker honouring excludes
+scripts/
+  hook-lib.mjs         hook wire protocol: deny, block, context, visible errors, state dir
+  hook-config.mjs      the `guard` and `houseRules` config sections, strictly validated
+  shell-tokens.mjs     shell parser shared by the Bash guards
+  guard.mjs            destructive commands and commit messages
+  no-truncate.mjs      truncated command output
+  no-suppress.mjs      check-silencing edits
+  suppression-rules.mjs  the suppression catalog
+  house-rules.mjs      house rules injection
+  guard.sh / hook-open.sh  fail-closed / fail-open wrappers
+house-rules/
+  default.md           the shipped default ruleset
 ```
 
 To add a stack, implement `StackAdapter` and register a factory in `adapters/registry.ts`.
