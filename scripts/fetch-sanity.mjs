@@ -4,7 +4,12 @@
  * or a bot check served with a success status, which an agent will then quote as fact. A
  * structural check (the status code) provably misses this class, so the body is inspected.
  * Exit 2 is a warning after the fact — the tool already ran — so Claude sees the caveat.
+ *
+ * Informational: a parse failure never breaks a tool result, but it is reported visibly, because a
+ * sanity check that silently stopped running looks identical to one that found nothing.
  */
+import { readPayload, reportError, warnAfterTool } from "./hook-lib.mjs";
+
 const MARKERS = [
   /sign\s?in to (your|continue)/i, /you (?:need|must) (?:to )?(?:be )?(?:sign|log)(?:ed)?\s?in/i,
   /please (?:sign|log)\s?in/i, /create an account/i, /enable javascript/i,
@@ -25,25 +30,22 @@ function textOf(resp) {
 }
 
 async function main() {
-  let raw = "";
-  for await (const c of process.stdin) raw += c;
-  const input = JSON.parse(raw);
+  const input = await readPayload();
   const body = textOf(input.tool_response ?? input.tool_result ?? "");
   const url = input?.tool_input?.url ?? input?.tool_input?.prompt ?? "(unknown)";
 
   const hits = MARKERS.filter((re) => re.test(body)).map((re) => re.source);
   const tooShort = body.trim().length < MIN_CHARS;
-  if (hits.length === 0 && !tooShort) process.exit(0);
+  if (hits.length === 0 && !tooShort) return;
 
   const reasons = [];
   if (hits.length) reasons.push(`content matches login-wall/blocked markers (${hits.slice(0, 2).join(", ")})`);
   if (tooShort) reasons.push(`body is only ${body.trim().length} chars`);
 
-  process.stderr.write(
+  warnAfterTool(
     `Fetch returned a successful status but suspicious content for ${url}: ${reasons.join("; ")}. ` +
-    `Do NOT state conclusions from this response. Re-fetch with authentication, use an MCP connector for this service, or ask for the content directly.\n`,
+      `Do NOT state conclusions from this response. Re-fetch with authentication, use an MCP connector for this service, or ask for the content directly.`,
   );
-  process.exit(2); // warning; the tool already ran
 }
 
-main().catch(() => process.exit(0)); // never break a tool result on a parse failure
+main().catch((err) => reportError("fetch-sanity", `fetch sanity check did not run — ${err?.message ?? err}`));
