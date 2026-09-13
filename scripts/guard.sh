@@ -1,24 +1,33 @@
 #!/bin/sh
-# PreToolUse guard wrapper.
+# Wrapper for GUARDRAIL hooks. Usage: guard.sh <script.mjs>
 #
-# Hooks fail OPEN by default: a crash, timeout, or bad JSON lets the tool call proceed,
-# so a broken guardrail silently permits what it exists to prevent. Exit code 2 is the only
-# code that blocks unconditionally, so every internal failure here exits 2 — the guard fails
+# Hooks fail OPEN by default: a crash, a timeout, or a script that cannot start lets the tool call
+# proceed, so a broken guardrail silently permits what it exists to prevent. Exit code 2 is the only
+# code that blocks unconditionally, so every internal failure here exits 2 — this wrapper fails
 # CLOSED. A guard that cannot run must not be a guard that waves things through.
+#
+# Contrast hook-open.sh, which fails open (visibly) because it wraps informational hooks.
+#
+# The script name is checked against [a-z0-9-]+.mjs before it touches a path, so an argument like
+# ../../elsewhere.mjs cannot run a file outside scripts/.
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+NAME="${1:-}"
 
-if ! . "$ROOT/scripts/find-node.sh" 2>/dev/null; then
-  echo "stackmap guard: cannot load node resolution — blocking rather than failing open." >&2
+block() {
+  echo "stackmap guard: $1 — blocking rather than failing open." >&2
   exit 2
-fi
-if ! NODE=$(find_node); then
-  echo "stackmap guard: no usable node binary — blocking rather than failing open. Install Node 18+." >&2
-  exit 2
-fi
-GUARD="$ROOT/scripts/guard.mjs"
-if [ ! -f "$GUARD" ]; then
-  echo "stackmap guard: $GUARD missing — blocking rather than failing open." >&2
-  exit 2
-fi
-exec "$NODE" "$GUARD"
+}
+
+case "$NAME" in
+  "") block "no hook script named" ;;
+  .mjs | *[!a-z0-9-]*.mjs) block "invalid hook script name (expected [a-z0-9-]+.mjs)" ;;
+  *.mjs) ;;
+  *) block "invalid hook script name (expected [a-z0-9-]+.mjs)" ;;
+esac
+
+SCRIPT="$ROOT/scripts/$NAME"
+[ -f "$SCRIPT" ] || block "$SCRIPT missing"
+. "$ROOT/scripts/find-node.sh" 2>/dev/null || block "cannot load node resolution"
+NODE=$(find_node) || block "no usable node binary; install Node 18.17+"
+exec "$NODE" "$SCRIPT"
