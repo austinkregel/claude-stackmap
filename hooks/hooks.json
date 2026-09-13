@@ -6,7 +6,23 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/guard.sh"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/guard.sh guard.mjs",
+            "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/guard.sh no-truncate.mjs",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "^(?:Edit|Write|NotebookEdit)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/guard.sh no-suppress.mjs",
+            "timeout": 10
           }
         ]
       }
@@ -16,7 +32,24 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh freshness.mjs"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh freshness.mjs",
+            "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh house-rules.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh house-rules.mjs",
+            "timeout": 10
           }
         ]
       }
@@ -27,7 +60,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh fetch-sanity.mjs"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh fetch-sanity.mjs",
+            "timeout": 10
           }
         ]
       }
@@ -37,7 +71,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh review-arm.mjs"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh review-arm.mjs",
+            "timeout": 10
           }
         ]
       }
@@ -47,7 +82,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh review-check.mjs"
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh review-check.mjs",
+            "timeout": 10
           }
         ]
       }
