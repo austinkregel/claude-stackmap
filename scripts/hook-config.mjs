@@ -36,7 +36,7 @@ const DEFAULTS = {
       commands: [{ name: "git", listCommand: ["git", "--list-cmds=main,alias"] }],
     },
   },
-  houseRules: { enabled: true, mode: "extend", files: [], disable: [] },
+  houseRules: { enabled: true, subagents: true, mode: "extend", files: [], disable: [] },
 };
 
 function expandPath(p) {
