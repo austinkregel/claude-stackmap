@@ -1,12 +1,9 @@
 #!/usr/bin/env node
 /**
- * PostToolUse hook: catch fetches that returned HTTP 200 with the wrong content — a login wall
- * or a bot check served with a success status, which an agent will then quote as fact. A
- * structural check (the status code) provably misses this class, so the body is inspected.
- * Exit 2 is a warning after the fact — the tool already ran — so Claude sees the caveat.
+ * PostToolUse hook: catch fetches that returned a success status with the wrong content (a login
+ * wall or a bot check), by inspecting the body. Exit 2 warns Claude after the tool already ran.
  *
- * Informational: a parse failure never breaks a tool result, but it is reported visibly, because a
- * sanity check that silently stopped running looks identical to one that found nothing.
+ * Fails open, visibly: a parse failure never breaks a tool result, but it is reported.
  */
 import { readPayload, reportError, warnAfterTool } from "./hook-lib.mjs";
 
