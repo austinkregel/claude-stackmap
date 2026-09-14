@@ -1,9 +1,6 @@
 import type { Note, NoteStore, Drift } from "./store.js";
 
-/**
- * Standing authority per status. A retracted note keeps a non-zero weight on purpose:
- * a recorded wrong turn is still evidence, and surfacing it stops the same wrong turn twice.
- */
+/** Standing authority per status. Retracted stays non-zero so a recorded wrong turn still surfaces. */
 export const STATUS_WEIGHT: Record<Note["status"], number> = {
   current: 1.0,
   superseded: 0.35,
@@ -35,11 +32,7 @@ interface Doc {
   len: number;
 }
 
-/**
- * Tokenized docs are memoized against the Note object itself. The store replaces a Note object
- * only when its file changes, so identity is exactly the right invalidation key — and the entry
- * becomes collectable as soon as the old note is dropped.
- */
+/** Tokenized docs memoized by Note identity; sound only because the store replaces a Note when its file changes. */
 const docCache = new WeakMap<Note, Doc>();
 
 function docFor(note: Note): Doc {
@@ -64,13 +57,7 @@ function buildDoc(note: Note): Doc {
 
 /**
  * Inverted index over the current note set: token -> [docIndex, weightedTf][].
- *
- * Without it, prefix matching costs O(notes x queryTerms x tokensPerNote) per search, which is
- * what dominated at 5k notes. With it, a query touches the vocabulary once and then only the
- * documents that actually contain a matching token.
- *
- * Rebuilt only when the document set changes. Docs are memoized by note identity, so an
- * element-wise identity comparison is a sound and cheap staleness check.
+ * Rebuilt only when the doc set changes, detected by element-wise identity comparison.
  */
 interface Index {
   docs: Doc[];
@@ -123,8 +110,7 @@ export function scoreNotes(
   // Accumulate BM25 per document, touching only documents that match something.
   const acc = new Map<number, number>();
   for (const t of terms) {
-    // Exact postings plus prefix-expanded ones, discounted. One vocabulary pass per term
-    // rather than one pass over every document's token list.
+    // Exact postings plus substring-matched ones, discounted.
     const groups: Array<{ postings: Array<[number, number]>; weight: number }> = [];
     const exact = vocab.get(t);
     if (exact) groups.push({ postings: exact, weight: 1 });
