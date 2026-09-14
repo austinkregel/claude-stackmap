@@ -64,9 +64,13 @@ Send every highest-severity finding, and every finding whose only evidence is re
 and the reviewed ref. The auditor sees committed code only; a finding in an uncommitted file is
 reported as unaudited.
 
-- FALSIFIED: drop it from the findings and list it under "Falsified" with the counter-evidence.
-- SURVIVED: keep it, citing what the auditor tested.
+- FALSIFIED: drop it from the findings and list it under "Falsified", with the counter-evidence
+  attributed to the auditor's reproducer: the command and the actual output lines.
+- SURVIVED: keep it, citing the auditor's reproducer: the command and the actual output lines.
 - UNTESTED: keep it, marked untested, with what the auditor needed.
+
+A FALSIFIED or SURVIVED verdict always carries at least one reproducer, checked against the auditor's
+own transcript.
 
 ## 6. Report
 
