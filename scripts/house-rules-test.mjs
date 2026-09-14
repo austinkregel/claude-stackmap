@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 /**
  * Suite for house-rules.mjs: what is injected under each config, and that every failure injects
- * nothing while telling the user why. A fail-open hook that silently injected a partial or empty
- * rule set would look exactly like one that worked, so each check inspects the output itself.
+ * nothing while telling the user why. Checks inspect the injected output, not just the exit code.
  */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
