@@ -20,7 +20,8 @@
       ],
       "exclude": [],
       "options": {},
-      "enabled": true
+      "enabled": true,
+      "aliases": []
     },
     {
       "name": "legacy-app",
