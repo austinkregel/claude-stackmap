@@ -163,8 +163,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
 
     if (req.params.name.startsWith("note_")) {
       const store = NoteStore.fromConfig(config.notesDir);
-      // Notes are stamped against the default index's repo root when one is configured,
-      // so relative paths in a note resolve the same way on every later read.
+      // Stamp against the selected index's repo root so relative note paths resolve identically later.
       let repoRoot: string | null = null;
       try { repoRoot = expandPath(selectIndex(config, args.repo).root); } catch { repoRoot = null; }
       if (req.params.name === "note_write") return text(noteWrite(store, args, repoRoot));
