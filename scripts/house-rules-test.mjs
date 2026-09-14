@@ -4,7 +4,7 @@
  * nothing while telling the user why. Checks inspect the injected output, not just the exit code.
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,8 +22,8 @@ const configPath = join(sandbox, "config.json");
 const env = { ...process.env, STACKMAP_CONFIG: configPath, STACKMAP_STATE: join(sandbox, "state") };
 const setConfig = (obj) => writeFileSync(configPath, JSON.stringify(obj));
 
-function inject(event = "SessionStart") {
-  const r = spawnSync(runner, ["house-rules.mjs"], {
+function inject(event = "SessionStart", hookRunner = runner) {
+  const r = spawnSync(hookRunner, ["house-rules.mjs"], {
     input: JSON.stringify({ hook_event_name: event, session_id: "t", cwd: sandbox, source: "startup" }),
     encoding: "utf8",
     env,
@@ -45,6 +45,8 @@ function inject(event = "SessionStart") {
 
 const defaultText = readFileSync(join(scripts, "..", "house-rules", "default.md"), "utf8");
 const defaultIds = [...defaultText.matchAll(/<!--\s*id:\s*([a-z0-9-]+)\s*-->/g)].map((m) => m[1]);
+const enforcedSections = [...defaultText.matchAll(/<!--\s*enforced-by:[^>]*-->\n## /g)].length;
+const enforcementList = (context) => context?.slice(context.indexOf("## Enforced by stackmap hooks")) ?? "";
 
 try {
   console.log("-- defaults --");
@@ -55,14 +57,45 @@ try {
     check("emits SessionStart additionalContext", r.eventName === "SessionStart" && typeof r.context === "string", r.stdout.slice(0, 200));
     check("starts with the default ruleset", r.context?.startsWith("# Working agreement"), r.context?.slice(0, 80));
     const headings = (r.context?.match(/^## /gm) ?? []).length;
-    check("every default section is present (plus the enforcement list)", defaultIds.length > 5 && headings === defaultIds.length + 1, `${headings} headings for ${defaultIds.length} ids`);
+    const expected = defaultIds.length - enforcedSections + 1;
+    check("every unenforced default section is present (plus the enforcement list)", defaultIds.length > 5 && enforcedSections > 0 && headings === expected, `${headings} headings, expected ${expected}`);
     check("id markers are metadata, not injected text", !r.context?.includes("<!-- id:"));
-    check("ends with the enforcement list", /## Enforced by stackmap hooks[\s\S]*tee is the command straight after the pipe/.test(r.context ?? ""));
+    check("enforced-by markers are metadata, not injected text", !r.context?.includes("enforced-by"));
+    check("ends with the enforcement list", /tee is the command straight after the pipe/.test(enforcementList(r.context)));
     check("stays under Claude Code's 10,000-character limit", (r.context?.length ?? Infinity) <= 10000, `${r.context?.length} chars`);
   }
   {
     const r = inject("SubagentStart");
     check("SubagentStart gets the same rules, under its own event name", r.eventName === "SubagentStart" && r.context?.startsWith("# Working agreement"));
+  }
+
+  console.log("\n-- rule text a guard enforces is left out while that guard is on --");
+  setConfig({});
+  {
+    const r = inject();
+    check("noTruncate on: the command-output section is left out", !r.context?.includes("## Command output"));
+    check("dead-code category on: the dead-code bullet is left out", !r.context?.includes("Dead code is deleted"));
+    check("…and the rest of its section stays", r.context?.includes("## Never narrow the problem") && r.context?.includes("A green result obtained by narrowing"));
+    check("commitMessage on: the commands bullet is left out", !r.context?.includes("Don't paste commands"));
+    check("…and the untagged bullet next to it stays", r.context?.includes("- Describe the change in prose."));
+  }
+  setConfig({ guard: { noTruncate: { enabled: false }, noSuppress: { disableCategories: ["dead-code"] }, commitMessage: { enabled: false } } });
+  {
+    const r = inject();
+    check("noTruncate off: the command-output section comes back", r.context?.includes("## Command output"));
+    check("dead-code category off: the dead-code bullet comes back", r.context?.includes("Dead code is deleted, not annotated"));
+    check("commitMessage off: the commands bullet comes back", r.context?.includes("- Don't paste commands into commit messages."));
+    check("a returned section keeps its wrapped lines", /the command may not be safe to run again/.test(r.context ?? ""));
+  }
+  setConfig({ guard: { noSuppress: { enabled: false } } });
+  check("noSuppress off entirely: the dead-code bullet comes back", inject().context?.includes("Dead code is deleted"));
+
+  console.log("\n-- houseRules.subagents --");
+  setConfig({ houseRules: { subagents: false } });
+  {
+    const sub = inject("SubagentStart");
+    check("subagents=false: SubagentStart injects nothing, quietly", sub.code === 0 && sub.stdout.trim() === "", `exit ${sub.code}, stdout ${sub.stdout.slice(0, 80)}`);
+    check("subagents=false: SessionStart still injects", inject().context?.startsWith("# Working agreement"));
   }
 
   console.log("\n-- extend, disable, replace --");
@@ -91,7 +124,7 @@ try {
   setConfig({ guard: { noTruncate: { enabled: false }, noSuppress: { disableCategories: ["coverage"] }, allowMerge: true } });
   {
     const r = inject();
-    check("a disabled guard is not claimed as enforced", !r.context?.includes("tee is the command straight after the pipe"));
+    check("a disabled guard is not claimed as enforced", !enforcementList(r.context).includes("tee is the command straight after the pipe"));
     check("a disabled suppression category is not listed", r.context?.includes("check-silencing directive") && !/check-silencing directive[^\n]*coverage/.test(r.context ?? ""));
     check("allowMerge drops git merge from the destructive list", /Destructive commands are blocked: force push/.test(r.context ?? ""));
   }
@@ -121,6 +154,31 @@ try {
   expectVisibleFailure("replace with no files", /needs at least one entry/);
   writeFileSync(configPath, "{broken");
   expectVisibleFailure("invalid JSON config", /not valid JSON/);
+  setConfig({ houseRules: { subagents: "no" } });
+  expectVisibleFailure("non-boolean subagents", /houseRules\.subagents: expected true or false/);
+
+  // Defects in the shipped default are exercised on a copy of the plugin with an edited default.md.
+  const plugin = join(sandbox, "plugin");
+  cpSync(scripts, join(plugin, "scripts"), { recursive: true });
+  cpSync(join(scripts, "..", "house-rules"), join(plugin, "house-rules"), { recursive: true });
+  const pluginRunner = join(plugin, "scripts", "hook-open.sh");
+  const withDefault = (text) => writeFileSync(join(plugin, "house-rules", "default.md"), text);
+  const expectDefaultDefect = (label, pattern) => {
+    const r = inject("SessionStart", pluginRunner);
+    check(`${label}: no context injected`, r.context === null, r.stdout.slice(0, 120));
+    check(`${label}: the user is told why`, pattern.test(r.systemMessage ?? ""), r.systemMessage ?? "(no systemMessage)");
+  };
+  setConfig({});
+  withDefault(defaultText.replace("enforced-by: noTruncate", "enforced-by: noTrunc"));
+  expectDefaultDefect("unknown enforced-by name", /unknown enforced-by name "noTrunc"/);
+  withDefault(defaultText.replace("enforced-by: noSuppress:dead-code", "enforced-by: noSuppress:deadcode"));
+  expectDefaultDefect("unknown suppression category in enforced-by", /unknown enforced-by name "noSuppress:deadcode"/);
+  setConfig({ houseRules: { disable: ["command-output"] } });
+  withDefault(defaultText.replace("enforced-by: noTruncate", "enforced-by: noTrunc"));
+  expectDefaultDefect("unknown enforced-by name in a disabled section", /unknown enforced-by name "noTrunc"/);
+  setConfig({});
+  withDefault(defaultText.replace("<!-- enforced-by: commitMessage -->\n- Don't", "<!-- enforced-by: commitMessage -->\n\n- Don't"));
+  expectDefaultDefect("enforced-by line not directly above a heading or bullet", /must be directly above a "## " heading or a "- " bullet/);
 
   console.log("\n-- disabled --");
   setConfig({ houseRules: { enabled: false } });
