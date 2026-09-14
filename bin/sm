@@ -1,7 +1,5 @@
 #!/bin/sh
-# stackmap CLI. On PATH whenever the plugin is enabled.
-# Replaces hand-retyped data one-liners, which drop rows silently when a filter misses or a
-# parse error goes unreported. Every command here reports its counts instead.
+# stackmap CLI. On PATH whenever the plugin is enabled. Every command reports its counts.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 . "$ROOT/scripts/find-node.sh"
