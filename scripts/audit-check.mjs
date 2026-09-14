@@ -6,11 +6,10 @@
  * After one block (`stop_hook_active`), it lets the auditor finish and tells the user what the
  * report still lacks. Fails open, visibly, on internal errors.
  */
-import { AUDIT_FORM, auditReportProblems } from "./deliverables.mjs";
+import { AUDIT_FORM, AUDITOR_AGENT as AGENT, auditReportProblems } from "./deliverables.mjs";
 import { blockStop, notifyUser, readPayload, reportError } from "./hook-lib.mjs";
 
 const HOOK = "audit-check";
-const AGENT = "stackmap:adversarial-auditor";
 
 async function main() {
   const input = await readPayload();
