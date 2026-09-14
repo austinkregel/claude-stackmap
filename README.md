@@ -262,7 +262,8 @@ left out unless asked for and counted in `excludedRetracted`. Records that don't
   `NOTIN`, `MISSING`) hold when no element matches.
 - **Case:** string comparisons and regexes are case-insensitive. Ranges compare numbers numerically
   and strings as text, case-sensitively. A number never compares with a string.
-- **Presence:** `EXISTS` means the key is present, even with a `null` value.
+- **Presence:** `EXISTS` needs a non-null value. A key present with `null` counts as `MISSING`; use
+  `EQUAL null` to find nulls.
 
 ## Guards
 
