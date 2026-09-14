@@ -103,16 +103,23 @@ interface Parsed {
   typed: { schema: string; version: number; dataSha256: string } | null;
 }
 
-/** Split frontmatter into scalar lines and file entries, without interpreting values. */
-function frontmatter(raw: string, file: string): { scalars: Map<string, string>; files: Array<Map<string, string>>; body: string } {
+/**
+ * Split frontmatter into scalar lines and file entries, without interpreting values. Blank lines carry
+ * nothing and are passed over; any other line that isn't a known key, and any key given twice, is an
+ * error.
+ */
+function frontmatter(raw: string, file: string, keys: readonly string[]): { scalars: Map<string, string>; files: Array<Map<string, string>>; body: string } {
   const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(raw);
   if (!m) throw new Error(`${file}: no frontmatter block (a note starts with --- and a closing ---)`);
   const scalars = new Map<string, string>();
   const files: Array<Map<string, string>> = [];
+  let sawFiles = false;
   let inFiles = false;
   for (const line of m[1]!.split("\n")) {
+    if (line.trim() === "") continue;
     if (/^files:\s*$/.test(line)) {
-      inFiles = true;
+      if (sawFiles) throw new Error(`${file}: frontmatter has "files" twice`);
+      sawFiles = inFiles = true;
       continue;
     }
     if (inFiles) {
@@ -123,22 +130,29 @@ function frontmatter(raw: string, file: string): { scalars: Map<string, string>;
       }
       const kv = /^\s+(root|sha256|at):\s*(.+)$/.exec(line);
       if (kv) {
-        if (!files.length) throw new Error(`${file}: a "${kv[1]}" line comes before any "- path:" under files`);
-        files[files.length - 1]!.set(kv[1]!, kv[2]!);
+        const entry = files[files.length - 1];
+        if (!entry) throw new Error(`${file}: a "${kv[1]}" line comes before any "- path:" under files`);
+        if (entry.has(kv[1]!)) throw new Error(`${file}: files[${files.length - 1}] has "${kv[1]}" twice`);
+        entry.set(kv[1]!, kv[2]!);
         continue;
       }
-      if (/^\S/.test(line)) inFiles = false;
-      else if (line.trim() !== "") throw new Error(`${file}: unrecognized line under files: ${line.trim()}`);
-      else continue;
+      if (/^\s/.test(line)) throw new Error(`${file}: unrecognized line under files: ${line.trim()}`);
+      inFiles = false;
     }
     const kv = /^([a-z_0-9]+):\s*(.*)$/.exec(line);
-    if (kv) scalars.set(kv[1]!, kv[2]!);
+    if (!kv) throw new Error(`${file}: unrecognized frontmatter line: ${line}`);
+    if (!keys.includes(kv[1]!)) throw new Error(`${file}: unknown frontmatter key "${kv[1]}" (expected ${keys.join(", ")}, files)`);
+    if (scalars.has(kv[1]!)) throw new Error(`${file}: frontmatter has "${kv[1]}" twice`);
+    scalars.set(kv[1]!, kv[2]!);
   }
+  if (!sawFiles) throw new Error(`${file}: frontmatter has no "files"`);
   return { scalars, files, body: (m[2] ?? "").trim() };
 }
 
+const FORMAT2_KEYS = ["format", "id", "title", "status", "created", "verified_on", "repo", "tags", "supersedes", "superseded_by", "schema", "schema_version", "data_sha256"] as const;
+
 function parseFormat2(raw: string, file: string): Parsed {
-  const { scalars, files, body } = frontmatter(raw, file);
+  const { scalars, files, body } = frontmatter(raw, file, FORMAT2_KEYS);
   const value = (key: string, required = true): unknown => {
     const text = scalars.get(key);
     if (text === undefined) {
@@ -188,6 +202,10 @@ function parseFormat2(raw: string, file: string): Parsed {
     return { path, ...(root !== undefined ? { root } : {}), sha256: sha, at };
   });
   let typed: Parsed["typed"] = null;
+  const typedKeys = ["schema", "schema_version", "data_sha256"].filter((k) => scalars.has(k));
+  if (typedKeys.length && typedKeys.length < 3) {
+    throw new Error(`${file}: a typed note needs schema, schema_version, and data_sha256 together; it has only ${typedKeys.join(", ")}`);
+  }
   if (scalars.has("schema")) {
     const version = value("schema_version");
     if (typeof version !== "number" || !Number.isInteger(version)) throw new Error(`${file}: frontmatter "schema_version" must be an integer`);
@@ -211,38 +229,84 @@ function parseFormat2(raw: string, file: string): Parsed {
   };
 }
 
-/** The format written before format 2: only `"` was escaped, lists were split on commas. Read so old notes still work; rewritten as format 2 on their next write. */
-function parseLegacy(raw: string, file: string, fallbackId: string): Parsed {
-  const { scalars, files, body } = frontmatter(raw, file);
-  const unquote = (v: string | undefined) => {
-    const t = (v ?? "").trim();
-    if (t === "null" || t === "") return "";
-    return t.replace(/^"(.*)"$/s, "$1").replace(/\\"/g, '"');
-  };
-  const list = (v: string | undefined) => {
-    const t = (v ?? "").trim();
-    if (!t.startsWith("[")) return [];
-    return t.slice(1, -1).split(",").map((s) => unquote(s)).filter(Boolean);
-  };
-  const status = unquote(scalars.get("status")) || "current";
-  if (!STATUSES.includes(status as NoteStatus)) throw new Error(`${file}: unknown status "${status}" (expected ${STATUSES.join(", ")})`);
-  const stamps: FileStamp[] = [];
-  for (const f of files) {
-    if (!f.get("sha256")) continue;
-    const root = f.get("root");
-    stamps.push({ path: unquote(f.get("path")), ...(root !== undefined ? { root: unquote(root) } : {}), sha256: unquote(f.get("sha256")), at: unquote(f.get("at")) });
+const LEGACY_KEYS = ["id", "title", "status", "created", "verified_on", "repo", "tags", "supersedes", "superseded_by"] as const;
+
+/**
+ * Read one double-quoted value as the format before format 2 wrote it: `"` escaped as `\"`, nothing
+ * else escaped. Returns the value and where it ended.
+ */
+function legacyString(text: string, start: number, where: string): { value: string; end: number } {
+  if (text[start] !== '"') throw new Error(`${where}: expected a double-quoted string at ${JSON.stringify(text.slice(start))}`);
+  let value = "";
+  for (let i = start + 1; i < text.length; i++) {
+    if (text[i] === "\\" && text[i + 1] === '"') {
+      value += '"';
+      i++;
+    } else if (text[i] === '"') {
+      return { value, end: i + 1 };
+    } else {
+      value += text[i];
+    }
   }
+  throw new Error(`${where}: unterminated string ${text.slice(start)}`);
+}
+
+/**
+ * The format written before format 2. Read so old notes still work, and rewritten as format 2 on their
+ * next write. Every writer of it emitted all of LEGACY_KEYS, `status` as a bare word, and a path,
+ * sha256, and at on every file entry, so anything missing or shaped otherwise is an error, never a
+ * default.
+ */
+function parseLegacy(raw: string, file: string): Parsed {
+  const { scalars, files, body } = frontmatter(raw, file, LEGACY_KEYS);
+  const text = (key: string) => {
+    const v = scalars.get(key);
+    if (v === undefined) throw new Error(`${file}: frontmatter has no "${key}"`);
+    return v.trim();
+  };
+  const str = (key: string, v = text(key)) => {
+    const { value, end } = legacyString(v, 0, `${file}: "${key}"`);
+    if (end !== v.length) throw new Error(`${file}: "${key}" has text after its closing quote: ${v}`);
+    return value;
+  };
+  const strOrNull = (key: string) => (text(key) === "null" ? null : str(key));
+  const list = (key: string) => {
+    const v = text(key);
+    if (!v.startsWith("[") || !v.endsWith("]")) throw new Error(`${file}: "${key}" must be a [..] list, got ${v}`);
+    const inner = v.slice(1, -1).trim();
+    const out: string[] = [];
+    let i = 0;
+    while (i < inner.length) {
+      const { value, end } = legacyString(inner, i, `${file}: "${key}"`);
+      out.push(value);
+      const rest = /^\s*(,\s*)?/.exec(inner.slice(end))!;
+      if (!rest[1] && end + rest[0].length < inner.length) throw new Error(`${file}: "${key}" needs a comma between items: ${v}`);
+      if (rest[1] && end + rest[0].length === inner.length) throw new Error(`${file}: "${key}" ends with a comma: ${v}`);
+      i = end + rest[0].length;
+    }
+    return out;
+  };
+  const status = text("status");
+  if (!STATUSES.includes(status as NoteStatus)) throw new Error(`${file}: unknown status "${status}" (expected ${STATUSES.join(", ")})`);
+  const stamps: FileStamp[] = files.map((f, i) => {
+    const field = (k: string) => {
+      const v = f.get(k);
+      if (v === undefined) throw new Error(`${file}: files[${i}] has no "${k}"`);
+      return str(`files[${i}].${k}`, v.trim());
+    };
+    return { path: field("path"), ...(f.has("root") ? { root: field("root") } : {}), sha256: field("sha256"), at: field("at") };
+  });
   return {
     note: {
-      id: unquote(scalars.get("id")) || fallbackId,
-      title: unquote(scalars.get("title")) || fallbackId,
+      id: str("id"),
+      title: str("title"),
       status: status as NoteStatus,
-      created: unquote(scalars.get("created")) || new Date(0).toISOString(),
-      verifiedOn: unquote(scalars.get("verified_on")) || null,
-      tags: list(scalars.get("tags")),
-      repo: unquote(scalars.get("repo")) || null,
-      supersedes: list(scalars.get("supersedes")),
-      supersededBy: list(scalars.get("superseded_by")),
+      created: str("created"),
+      verifiedOn: strOrNull("verified_on"),
+      tags: list("tags"),
+      repo: strOrNull("repo"),
+      supersedes: list("supersedes"),
+      supersededBy: list("superseded_by"),
       files: stamps,
       body,
     },
@@ -250,8 +314,8 @@ function parseLegacy(raw: string, file: string, fallbackId: string): Parsed {
   };
 }
 
-function parseNote(raw: string, file: string, fallbackId: string): Parsed {
-  return /^---\nformat: 2\n/.test(raw) ? parseFormat2(raw, file) : parseLegacy(raw, file, fallbackId);
+function parseNote(raw: string, file: string): Parsed {
+  return /^---\nformat: 2\n/.test(raw) ? parseFormat2(raw, file) : parseLegacy(raw, file);
 }
 
 const hashCache = new Map<string, { key: string; hash: string }>();
@@ -299,7 +363,7 @@ export class NoteStore {
   private load(name: string): Note {
     const id = name.replace(/\.md$/, "");
     const mdPath = join(this.dir, name);
-    const parsed = parseNote(readFileSync(mdPath, "utf8"), name, id);
+    const parsed = parseNote(readFileSync(mdPath, "utf8"), name);
     if (!parsed.typed) return { ...parsed.note, record: null };
     const dataName = `${id}.json`;
     const dataPath = join(this.dir, dataName);
