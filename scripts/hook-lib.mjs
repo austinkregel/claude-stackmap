@@ -1,23 +1,16 @@
 /**
  * Shared hook protocol: reading a payload, emitting a decision, reporting a failure, and locating
- * session state. One source of truth so the hooks cannot drift apart on the wire format.
+ * session state.
  *
- * Dependency-free and never imported from dist/: a broken TypeScript build must not be able to
- * disable a hook.
+ * Dependency-free and never imported from dist/, so a broken TypeScript build cannot disable a hook.
  *
- * Every function here sets `process.exitCode` and returns instead of calling `process.exit()`.
- * Node documents `process.exit()` as ending the process "as quickly as possible even if there are
- * still asynchronous operations pending, including writes to process.stdout", which can cut off
- * the decision JSON on a slow pipe. Claude Code reads that JSON on every exit code (hooks
- * reference, "Exit code output"), so losing it loses the structured decision. Callers therefore
- * `return deny(...)` and let the process end on its own.
+ * Every function sets `process.exitCode` and returns; `process.exit()` can cut off the decision
+ * JSON before stdout flushes.
  *
- * Two failure doctrines, never mixed (see guard.sh and hook-open.sh):
- *   - GUARDRAILS fail CLOSED: `failClosed()` exits 2, the only code that blocks unconditionally.
- *   - INFORMATIONAL hooks fail OPEN but VISIBLY: `reportError()`. Stderr from a hook that exits 0
- *     "goes to the debug log only, never the transcript, and Claude never sees it" (hooks
- *     reference, "Exit code 0"), so a stderr-only report is a silent failure. `systemMessage` is
- *     the documented field that is shown to the user.
+ * Two failure modes, never mixed (see guard.sh and hook-open.sh):
+ *   - Guardrails fail closed: `failClosed()` exits 2, the only code that blocks unconditionally.
+ *   - Informational hooks fail open, visibly: `reportError()` emits a `systemMessage`, because
+ *     stderr from a hook that exits 0 is never shown.
  */
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -72,10 +65,7 @@ export function addContext(hookEventName, text) {
   emit({ hookSpecificOutput: { hookEventName, additionalContext: text } });
 }
 
-/**
- * PostToolUse: warn Claude about a tool result that already happened. The hooks reference says to
- * "exit 2 instead so Claude sees the stderr even though the tool already ran".
- */
+/** PostToolUse: warn Claude about a tool result that already happened. Exit 2 makes Claude see stderr. */
 export function warnAfterTool(text) {
   process.stderr.write(text + "\n");
   process.exitCode = 2;
@@ -90,10 +80,7 @@ export function failClosed(hook, what) {
   );
 }
 
-/**
- * Informational hook: fail open, visibly. The session or turn continues; the user sees the
- * message in the transcript instead of it vanishing into the debug log.
- */
+/** Informational hook: fail open, visibly. Exit 1 is non-blocking; the user sees `systemMessage`. */
 export function reportError(hook, err) {
   const message = err instanceof Error ? err.message : String(err);
   emit({ systemMessage: `stackmap ${hook}: ${message}` });
@@ -103,8 +90,7 @@ export function reportError(hook, err) {
 
 /**
  * Where per-session state lives: $STACKMAP_STATE, else ~/.stackmap. A relative $STACKMAP_STATE is
- * rejected rather than resolved: hooks run with the project as cwd, so a relative path would
- * scatter state across every repo the plugin is used in.
+ * rejected because hooks run with the project as cwd.
  */
 export function stateDir() {
   const fromEnv = process.env.STACKMAP_STATE;
