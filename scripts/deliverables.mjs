@@ -6,6 +6,9 @@
  * an earlier mention of a label doesn't count as the block.
  */
 
+/** The auditor's agent type as Claude Code reports it: `<plugin name>:<agent name>`. */
+export const AUDITOR_AGENT = "stackmap:adversarial-auditor";
+
 export const VERDICTS = ["FALSIFIED", "SURVIVED", "UNTESTED"];
 export const GRADES = ["PROVEN", "INFERRED", "SPECULATIVE"];
 export const METHODS = ["static", "dynamic", "byte-level", "differential", "documentary", "reconstructive"];
@@ -49,7 +52,7 @@ function listAfter(text, label) {
   return { inline, items };
 }
 
-export const AUDIT_FORM = [
+export const AUDIT_BLOCK = [
   "Claim: <the claim as given>",
   "Audited at: <ref>@<short sha>",
   "Verdict: FALSIFIED | SURVIVED | UNTESTED",
@@ -58,7 +61,8 @@ export const AUDIT_FORM = [
   "Grade: PROVEN | INFERRED | SPECULATIVE",
   "Unchecked: <what went unchecked, or \"nothing\">",
   "Needs: <the access that would let you test it>   (UNTESTED only)",
-].join("\n");
+];
+export const AUDIT_FORM = AUDIT_BLOCK.join("\n");
 
 export function auditReportProblems(text) {
   const missing = [];
@@ -90,12 +94,13 @@ export function auditReportProblems(text) {
   return missing;
 }
 
-export const REVIEW_FORM = [
+export const REVIEW_BLOCK = [
   "Reviewed at <sha>, <N> uncommitted file(s) present, <timestamp>.",
   "Axes covered: <list>. Axes skipped: <list, with why>.",
   "Verification: <what was actually run>.",
   "Audited: <n> — <n> survived, <n> falsified, <n> untested   (or: Audited: none — <why>)",
-].join("\n");
+];
+export const REVIEW_FORM = REVIEW_BLOCK.join("\n");
 
 export function reviewProblems(text) {
   const missing = [];
@@ -113,16 +118,20 @@ export function reviewProblems(text) {
   return missing;
 }
 
-export const DOUBLE_BLIND_FORM = [
+export const DOUBLE_BLIND_BLOCK = [
   "Double-blind on: <the falsifiable claim>",
   "Base: <ref>@<short sha>",
   "Methods: <method> — <PROVEN|INFERRED|SPECULATIVE>; <method> — <grade>",
   "Adversarial wave: <FALSIFIED|SURVIVED|UNTESTED> — <what was actually tested>",
   "Unverified: <what remains unproven, or \"nothing\">",
+];
+export const DOUBLE_BLIND_ABORT = "Double-blind aborted: <why there is nothing to check against>";
+export const DOUBLE_BLIND_FORM = [
+  ...DOUBLE_BLIND_BLOCK,
   "",
   `Methods are: ${METHODS.join(", ")}. At least two, all different.`,
   "If the question could not be stated falsifiably, end instead with:",
-  "Double-blind aborted: <why there is nothing to check against>",
+  DOUBLE_BLIND_ABORT,
 ].join("\n");
 
 export function doubleBlindProblems(text) {
@@ -154,6 +163,12 @@ export function doubleBlindProblems(text) {
 
 /** Skills whose turn can't end until the final message carries their closing block. */
 export const ENFORCED_SKILLS = [
-  { name: "review", trigger: /(^|\s)\/(stackmap:)?review(\s|$)/i, problems: reviewProblems, form: REVIEW_FORM },
-  { name: "double-blind", trigger: /(^|\s)\/(stackmap:)?double-blind(\s|$)/i, problems: doubleBlindProblems, form: DOUBLE_BLIND_FORM },
+  { name: "review", trigger: /(^|\s)\/(stackmap:)?review(\s|$)/i, problems: reviewProblems, form: REVIEW_FORM, blocks: [REVIEW_BLOCK] },
+  {
+    name: "double-blind",
+    trigger: /(^|\s)\/(stackmap:)?double-blind(\s|$)/i,
+    problems: doubleBlindProblems,
+    form: DOUBLE_BLIND_FORM,
+    blocks: [DOUBLE_BLIND_BLOCK, [DOUBLE_BLIND_ABORT]],
+  },
 ];
