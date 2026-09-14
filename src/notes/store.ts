@@ -131,18 +131,12 @@ export class NoteStore {
 
   private pathFor(id: string) { return join(this.dir, `${id}.md`); }
 
-  /**
-   * Parsed-note cache keyed by filename, invalidated per-file by mtime+size. The MCP server is
-   * long-lived, so without this every search re-reads and re-parses the whole store — which is
-   * the part that actually degrades as the store grows, not the scoring.
-   */
+  /** Parsed-note cache keyed by filename, invalidated per-file by mtime:size. */
   private cache = new Map<string, { key: string; note: Note }>();
 
   /**
-   * Re-statting every note file on each search dominated cost at scale (95ms of 99ms at 5k
-   * notes). A directory watcher marks the listing dirty on any change, so repeated searches in
-   * a turn cost nothing. `fs.watch` can miss or delay events, so a wall-clock backstop forces a
-   * rescan regardless — the watcher is an optimization, never the correctness boundary.
+   * Directory listing cache, marked dirty by a watcher. `fs.watch` can miss events, so a
+   * wall-clock backstop forces a rescan regardless: the watcher is never the correctness boundary.
    */
   private listCache: Note[] | null = null;
   private dirty = true;
