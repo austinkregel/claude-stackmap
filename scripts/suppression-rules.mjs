@@ -1,14 +1,11 @@
 /**
  * The catalog of check-silencing directives that no-suppress.mjs blocks an edit from introducing.
  *
- * Data, not code: each rule names a category, the files it applies to, and a pattern. Patterns are
- * scoped to file types so a lookalike in another language cannot match — Rust and Java iterators
- * have a `skip(n)` method, and a pattern written for JavaScript test runners must never see them.
+ * Each rule names a category, the files it applies to, and a pattern. Patterns are scoped to file
+ * types so a lookalike in another language (an iterator's `skip(n)`) cannot match.
  *
  * Every pattern is assembled from fragments with `re(...)`, and rule ids avoid directive text, so
- * no complete directive appears in this file's source. Otherwise the guard would block edits to
- * the very file that defines it. suppress-test.mjs pins that: the catalog's own source must match
- * none of the rules that apply to it.
+ * this file never contains a complete directive and the guard never blocks edits to it.
  *
  * Categories (guard.noSuppress.disableCategories can switch one off):
  *   lint        a linter or static analyser told to ignore code or a rule
@@ -20,9 +17,8 @@
  *   ci          a CI step allowed to fail without failing the build
  *
  * Stated limits: directives written through Bash (`sed -i`, `cat >`) are not seen by an Edit/Write
- * hook. Pest's `->skip()` chain is not matched, because Laravel collections share the method name
- * and the two cannot be told apart from the text. ESLint rules configured inside package.json are
- * not matched.
+ * hook. Pest's `->skip()` chain is not matched (Laravel collections share the name). ESLint rules
+ * configured inside package.json are not matched.
  */
 
 export const CATEGORIES = ["lint", "type", "test-skip", "coverage", "dead-code", "hook-bypass", "ci"];
@@ -264,9 +260,8 @@ const countOf = (pattern, text) => {
 };
 
 /**
- * Rules whose match count went up between `before` and `after`. Counting per rule, rather than
- * asking "was any directive already present", means adding a second, different directive next to
- * an existing one is still caught.
+ * Rules whose match count went up between `before` and `after`. Counted per rule, so a second
+ * directive added next to an existing one is still caught.
  */
 export function introduced(rules, pairs) {
   const hits = [];
