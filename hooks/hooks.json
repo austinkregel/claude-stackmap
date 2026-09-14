@@ -71,7 +71,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh review-arm.mjs",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh skill-arm.mjs",
             "timeout": 10
           }
         ]
@@ -82,7 +82,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh review-check.mjs",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh skill-check.mjs",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "^stackmap:adversarial-auditor$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh audit-check.mjs",
             "timeout": 10
           }
         ]
