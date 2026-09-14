@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 /**
- * Regression suite for no-suppress.mjs and the suppression-rules.mjs catalog.
+ * Suite for no-suppress.mjs and the suppression-rules.mjs catalog.
  *
- * Fixture directives are assembled from fragments with F(), for the same reason the catalog's
- * patterns are: a file containing them literally cannot be saved while the guard is running.
+ * Fixtures are fragmented with F() so the guard can save this file.
  */
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -51,8 +50,7 @@ try {
     console.log(`${tally(new Set(ids).size === ids.length) ? "PASS" : "FAIL"}  rule ids are unique`);
     const badCategory = RULES.filter((r) => !CATEGORIES.includes(r.category)).map((r) => r.id);
     console.log(`${tally(badCategory.length === 0) ? "PASS" : "FAIL"}  every rule has a known category${badCategory.length ? `  <- ${badCategory}` : ""}`);
-    // A guardrail that blocks its own maintenance is a design defect: the catalog, this suite, and
-    // the guard must be editable while the guard is running.
+    // The catalog, this suite, and the guard must stay editable while the guard is running.
     for (const file of ["suppression-rules.mjs", "suppress-test.mjs", "no-suppress.mjs"]) {
       const source = readFileSync(join(scripts, file), "utf8");
       const selfHits = rulesForPath(file).filter((r) => r.pattern.test(source)).map((r) => r.id);
@@ -61,8 +59,8 @@ try {
   }
 
   console.log("\n-- lookalikes that must survive --");
-  check("regression: Rust iterator skip(n) is not a skipped test", ALLOW, edit("/x/a.rs", "let a = 1;", F("let rest = lines.iter().sk", "ip(1);")));
-  check("regression: Java stream skip(n) is not a skipped test", ALLOW, edit("/x/A.java", "int a;", F("long n = list.stream().sk", "ip(n).count();")));
+  check("Rust iterator skip(n) is not a skipped test", ALLOW, edit("/x/a.rs", "let a = 1;", F("let rest = lines.iter().sk", "ip(1);")));
+  check("Java stream skip(n) is not a skipped test", ALLOW, edit("/x/A.java", "int a;", F("long n = list.stream().sk", "ip(n).count();")));
   check("Laravel collection skip(2) in PHP", ALLOW, edit("/x/a.php", "$a = 1;", F("$rest = $items->sk", "ip(2);")));
   check("a model's fit method is not a focused test", ALLOW, edit("/x/train.ts", "const a = 1;", "model.fit(data);"));
   check("process termination is not a skipped test", ALLOW, edit("/x/run.mjs", "const a = 1;", F("if (bad) process.exi", "t(1);")));
@@ -75,7 +73,7 @@ try {
   {
     const existing = join(sandbox, "legacy.ts");
     writeFileSync(existing, F("// @ts", "-nocheck\nexport const a = 1;\n"));
-    check("regression: Write of a file that ALREADY carries a directive", ALLOW, write(existing, F("// @ts", "-nocheck\nexport const a = 2;\n")));
+    check("Write of a file that ALREADY carries a directive", ALLOW, write(existing, F("// @ts", "-nocheck\nexport const a = 2;\n")));
   }
 
   console.log("\n-- inline directives, one per language family --");
@@ -117,7 +115,7 @@ try {
 
   console.log("\n-- per-rule counting --");
   check(
-    "regression: a DIFFERENT directive added next to an existing one",
+    "a DIFFERENT directive added next to an existing one",
     BLOCK,
     edit("/x/a.ts", F("// eslint", "-disable-line\nconst a = 1;"), F("// eslint", "-disable-line\n// @ts", "-nocheck\nconst a = 1;")),
   );
