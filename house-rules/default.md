@@ -46,6 +46,7 @@ AGENTS.md can override a rule by saying so explicitly.
 <!-- id: no-narrowing -->
 - Never disable, skip, exclude, relax, suppress, or comment out a test, assertion, lint, type
   check, or input case to get green. Fix the cause.
+<!-- enforced-by: noSuppress:dead-code -->
 - Dead code is deleted, not annotated to keep the tooling quiet. It is tech debt and a liability.
 - A batch ends in handled or failed — never silently skipped.
 - A green result obtained by narrowing the input is not a pass.
@@ -74,6 +75,7 @@ AGENTS.md can override a rule by saying so explicitly.
 - Be surgical: touch only what was agreed. Report other problems you find instead of fixing them
   in the same pass.
 
+<!-- enforced-by: noTruncate -->
 ## Command output — never truncate it
 <!-- id: command-output -->
 - Never pipe a command's output into a filter that cuts it down. It hides errors and context, and
@@ -95,7 +97,9 @@ AGENTS.md can override a rule by saying so explicitly.
 - Commit finished, tested work; don't mix work in progress into it.
 - Commit finished work before starting parallel agents; run agents that edit code in their own
   worktrees. Don't open pull requests unless asked.
-- Describe the change in prose. Don't paste commands into commit messages.
+- Describe the change in prose.
+<!-- enforced-by: commitMessage -->
+- Don't paste commands into commit messages.
 
 ## Write it down
 <!-- id: write-it-down -->
