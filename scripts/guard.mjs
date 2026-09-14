@@ -3,16 +3,10 @@
  * stackmap PreToolUse guard — blocks a narrow set of destructive, hard-to-reverse commands, and
  * commit messages that contain a command.
  *
- * Design notes:
- *  - Fails CLOSED. Anything that prevents evaluation (unreadable payload, invalid config, a command
- *    the shell itself would reject) blocks. A guard that cannot evaluate must not wave the call
- *    through.
- *  - Evaluates the parsed command (shell-tokens.mjs), not its raw text. The old line splitter cut
- *    `git commit -m "wip; git merge later"` at the quoted `;` and saw a `git merge`; a parser
- *    knows the quoted text is a message.
- *  - Rules are narrow on purpose. `git merge-base` is read-only, so the merge rule excludes it.
- *    `rm -rf` is NOT blocked: it is overwhelmingly used on scratch directories, and a guardrail
- *    that fires on ordinary work gets switched off.
+ *  - Fails closed: anything that prevents evaluation (unreadable payload, invalid config, a command
+ *    the shell itself would reject) blocks.
+ *  - Evaluates the parsed command (shell-tokens.mjs), never its raw text.
+ *  - Rules are narrow on purpose: `git merge-base` is not blocked, and neither is `rm -rf`.
  *
  * Stated limits: a command whose name is built at runtime (`$GIT push --force`) is not
  * recognised, and neither is a refspec built at runtime (`git push origin "$BRANCH"`). Commit
@@ -59,9 +53,7 @@ function gitInvocation(stage) {
 }
 
 function currentBranch(cwd) {
-  // `rev-parse --abbrev-ref HEAD` prints "HEAD" on an unborn branch (a fresh repo or a new
-  // worktree before its first commit), which would silently disable the branch rules exactly
-  // where they matter. `symbolic-ref` reports the real branch name there.
+  // `symbolic-ref` first: `rev-parse --abbrev-ref HEAD` prints "HEAD" on an unborn branch.
   const attempts = [
     ["symbolic-ref", "--short", "HEAD"],
     ["rev-parse", "--abbrev-ref", "HEAD"],
@@ -268,7 +260,7 @@ function evaluate(stage, cfg, ctx) {
     if (sql) return `Blocked: destructive SQL (${sql[1].replace(/\s+/g, " ")}) against a live connection.`;
   }
 
-  // 7. A command inside a commit message is almost always a mis-type ("wip; git merge later").
+  // 7. A command inside a commit message.
   if (guard.commitMessage.enabled && inv?.sub === "commit") {
     for (const text of commitMessageTexts(inv, stage, ctx.cwd())) {
       const found = commandInMessage(text, guard.commitMessage.commands);
