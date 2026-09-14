@@ -9,6 +9,27 @@ export type AdapterId = "laravel" | "phoenix" | "node";
  */
 export type EdgeKind = "container" | "contextual" | "declaration";
 
+/**
+ * One root of a project: its main root, or an alias. `path` is the real path (symlinks resolved),
+ * which is what "the same file" is judged by. Rules are the root's own include/exclude, or null to
+ * inherit the project's.
+ */
+export interface IndexRoot {
+  kind: "root" | "alias";
+  /** As written in the config. */
+  configured: string;
+  path: string;
+  include: string[] | null;
+  exclude: string[] | null;
+}
+
+/** A file, relative to the project root it is grouped under (the innermost root containing it). */
+export interface FileRef {
+  root: string;
+  path: string;
+  exists: boolean;
+}
+
 /** One abstraction -> implementation edge, however the stack declares it. */
 export interface ResolutionEdge {
   kind: EdgeKind;
@@ -16,8 +37,10 @@ export interface ResolutionEdge {
   concrete: string | null;
   /** How the edge was declared, e.g. "container:bind", "container:when-needs-give", "php:implements". */
   via: string;
-  /** null when the concrete side is a closure/factory rather than a named type. */
-  concreteFile: string | null;
+  /** Where the concrete side's source may live; empty when it is a closure/factory rather than a named type. */
+  concreteFiles: FileRef[];
+  /** The root the declaring file is grouped under; `declaredIn` is relative to it. */
+  root: string;
   declaredIn: string;
   declaredLine: number;
   note?: string;
@@ -34,8 +57,9 @@ export interface ResolutionEdge {
 
 export interface SymbolHit {
   symbol: string;
-  /** Repo-relative path, or null when the symbol resolves to no file on disk. */
-  file: string | null;
+  /** Every place the symbol's source may live, across the project's roots. */
+  files: FileRef[];
+  /** True when at least one of `files` exists. */
   exists: boolean;
   /** Container edges where this symbol is the abstract. */
   implementedBy: ResolutionEdge[];
@@ -57,18 +81,28 @@ export interface SymbolHit {
   caveats: string[];
 }
 
+/** Per-root counts and anything about that root the caller must be told. */
+export interface RootStats {
+  kind: IndexRoot["kind"];
+  configured: string;
+  path: string;
+  filesScanned: number;
+  warnings: string[];
+  [k: string]: string | number | string[];
+}
+
 export interface AdapterStats {
   adapter: AdapterId;
-  root: string;
-  [k: string]: string | number;
+  roots: RootStats[];
+  [k: string]: string | number | RootStats[];
 }
 
 export interface StackAdapter {
   readonly id: AdapterId;
-  /** Resolve a symbol (class/module name) to a file plus its resolution edges. */
+  /** Resolve a symbol (class/module name) to its files plus its resolution edges. */
   resolveSymbol(name: string): SymbolHit;
   /**
-   * The abstraction -> implementation table for this repo. Defaults to the binding table
+   * The abstraction -> implementation table for this project. Defaults to the binding table
    * (container + contextual); pass kinds explicitly to include declaration edges.
    */
   resolutionTable(kinds?: EdgeKind[]): ResolutionEdge[];
@@ -76,9 +110,28 @@ export interface StackAdapter {
   stats(): AdapterStats;
 }
 
+/**
+ * What an index provides. Every capability is declared; null means the adapter doesn't have it, and
+ * a tool that needs it fails naming the adapter and the capability.
+ */
+export interface IndexedAdapter {
+  readonly id: AdapterId;
+  /** Cheap counts for `stackmap_indexes`. */
+  stats(): AdapterStats;
+  readonly resolve: StackAdapter | null;
+}
+
+export type Capability = Exclude<keyof IndexedAdapter, "id" | "stats">;
+
+/** Whether a root looks like this stack, and anything about the check the caller must be told. */
+export interface Detection {
+  matched: boolean;
+  notes: string[];
+}
+
 export interface AdapterFactory {
   id: AdapterId;
-  /** Repo-root marker files that identify this stack, checked in order. */
-  markers: string[];
-  create(cfg: IndexConfig, root: string, globalExclude: string[]): StackAdapter;
+  /** Decide from the root's own files (e.g. its package manifest) whether it is this stack. */
+  detect(root: string): Detection;
+  create(cfg: IndexConfig, roots: IndexRoot[], globalExclude: string[]): IndexedAdapter;
 }
