@@ -2,7 +2,7 @@
 /**
  * Suite for the PHP extractors and the Laravel adapter wiring, using inline fixtures.
  */
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -259,8 +259,13 @@ class AppServiceProvider
     }
 }
 `);
-    const adapter = laravelFactory.create({ name: "t", root: repo, adapter: "laravel", options: {}, enabled: true }, repo, []);
-    const stats = adapter.stats();
+    const indexed = laravelFactory.create(
+      { name: "t", root: repo, adapter: "laravel", options: {}, enabled: true, aliases: [] },
+      [{ kind: "root", configured: repo, path: realpathSync(repo), include: null, exclude: null }],
+      [],
+    );
+    const adapter = indexed.resolve;
+    const stats = indexed.stats();
     check("declaration edges are counted separately from bindings",
       stats.containerBindings === 1 && stats.contextualBindings === 1 && stats.declarationEdges === 2,
       JSON.stringify(stats));
@@ -282,7 +287,8 @@ class AppServiceProvider
     check("an empty implementedBy comes with a caveat, so it cannot read as a negative",
       hc.implementedBy.length === 0 && hc.caveats.some((c) => c.includes("not proof")), JSON.stringify(hc.caveats));
     check("a symbol that resolves to no file is still honest about it",
-      hc.exists === false && hc.file === "app/Contracts/HasComparators.php", `${hc.exists} ${hc.file}`);
+      hc.exists === false && hc.files.length === 1 && hc.files[0].path === "app/Contracts/HasComparators.php" && hc.files[0].exists === false && hc.files[0].root === realpathSync(repo),
+      JSON.stringify(hc.files));
 
     const thing = adapter.resolveSymbol("App\\Services\\Thing");
     check("injections answer 'what gets injected into X'",
@@ -296,6 +302,132 @@ class AppServiceProvider
       adapter.resolutionTable(["declaration"]).length === 2);
   } finally {
     rmSync(repo, { recursive: true, force: true });
+  }
+}
+
+console.log("\n-- adapter: a project with several roots --");
+{
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "stackmap-roots-")));
+  const put = (rel, text) => {
+    mkdirSync(dirname(join(base, rel)), { recursive: true });
+    writeFileSync(join(base, rel), text);
+  };
+  const LARAVEL = JSON.stringify({ require: { "laravel/framework": "^13.0" }, autoload: { "psr-4": { "App\\": "app/" } } });
+  const root = (kind, rel, include = null, exclude = null) => ({ kind, configured: rel, path: join(base, rel), include, exclude });
+  const make = (roots, cfgExtra = {}) =>
+    laravelFactory.create({ name: "multi", root: roots[0].path, adapter: "laravel", options: {}, enabled: true, aliases: [], ...cfgExtra }, roots, []);
+  try {
+    // main: an App providing a binding to a contract that lives in a package root.
+    put("main/composer.json", LARAVEL);
+    put("main/app/Providers/AppServiceProvider.php", `<?php
+namespace App\\Providers;
+use Pkg\\Contract;
+use Pkg\\Impl;
+class AppServiceProvider { public function register(): void { $this->app->bind(Contract::class, Impl::class); $this->app->singleton($this->key(), Impl::class); } }
+`);
+    put("main/app/Shared.php", "<?php\nnamespace App;\nclass Shared extends Base {}\n");
+    put("main/bootstrap/app.php", "<?php\nnamespace App;\nclass BootstrapApp extends Base {}\n");
+    put("main/bootstrap/cache/services.php", "<?php\nnamespace App;\nclass CachedServices extends Base {}\n");
+    put("main/config/app.php", "<?php\nnamespace App;\nclass ConfigThing extends Base {}\n");
+    put("main/routes/web.php", "<?php\nnamespace App;\nclass RoutesThing extends Base {}\n");
+    // pkg: a sibling root with its own composer.json and PSR-4 map.
+    put("pkg/composer.json", JSON.stringify({ autoload: { "psr-4": { "Pkg\\": "src/", "App\\": "src/app/" } } }));
+    put("pkg/src/Contract.php", "<?php\nnamespace Pkg;\ninterface Contract {}\n");
+    put("pkg/src/Impl.php", "<?php\nnamespace Pkg;\nclass Impl implements Contract {}\n");
+    put("pkg/src/app/Shared.php", "<?php\nnamespace App;\nclass Shared {}\n");
+    put("pkg/src/Providers/PkgProvider.php", "<?php\nnamespace Pkg\\Providers;\nclass PkgProvider { public function register(): void { $this->app->singleton($this->key(), Impl::class); } }\n");
+    // bare: a root with PHP files but no composer.json.
+    put("bare/src/Loose.php", "<?php\nnamespace Loose;\nclass Loose {}\n");
+
+    const two = make([root("root", "main"), root("alias", "pkg", ["src"])]);
+    const contract = two.resolve.resolveSymbol("Pkg\\Contract");
+    check("a symbol mapped by an alias's PSR-4 resolves to a file in that alias",
+      contract.exists && contract.files.length === 1 && contract.files[0].root === join(base, "pkg") && contract.files[0].path === "src/Contract.php",
+      JSON.stringify(contract.files));
+    check("a binding declared in the main root to a contract in the alias is found",
+      contract.implementedBy.length === 1 && contract.implementedBy[0].root === join(base, "main") && contract.implementedBy[0].declaredIn === "app/Providers/AppServiceProvider.php",
+      JSON.stringify(contract.implementedBy));
+    check("…with the concrete's file in the alias",
+      contract.implementedBy[0]?.concreteFiles?.[0]?.root === join(base, "pkg") && contract.implementedBy[0].concreteFiles[0].exists === true,
+      JSON.stringify(contract.implementedBy[0]?.concreteFiles));
+    const shared = two.resolve.resolveSymbol("App\\Shared");
+    check("a class present in two roots reports both files", shared.files.length === 2 && shared.files.every((f) => f.exists) && new Set(shared.files.map((f) => f.root)).size === 2, JSON.stringify(shared.files));
+    const s2 = two.stats();
+    check("the same relative computed site in two roots counts as two sites", s2.computedAbstractSites === 2, `${s2.computedAbstractSites}`);
+    check("stats report each root, aliases first then the main root", s2.roots.map((r) => r.configured).join() === "pkg,main" && s2.roots[0].psr4Prefixes === 2, JSON.stringify(s2.roots));
+
+    const main = s2.roots.find((r) => r.configured === "main");
+    const mainDecls = two.resolve.resolutionTable(["declaration"]).filter((e) => e.root === join(base, "main")).map((e) => e.declaredIn).sort();
+    check("the default include scans app/, bootstrap/, config/ and routes/",
+      mainDecls.join() === "app/Shared.php,bootstrap/app.php,config/app.php,routes/web.php", JSON.stringify(mainDecls));
+    check("…but not bootstrap/cache", main.filesScanned === 5 && !mainDecls.some((f) => f.startsWith("bootstrap/cache")), JSON.stringify(main));
+
+    const withBare = make([root("root", "main"), root("alias", "bare", ["src"])]);
+    const bare = withBare.stats().roots.find((r) => r.configured === "bare");
+    check("an alias with no composer.json is still indexed", bare.filesScanned === 1, JSON.stringify(bare));
+    check("…with a loud warning in stats", bare.warnings.some((w) => /no composer\.json/.test(w)), JSON.stringify(bare.warnings));
+    check("…and in every result's caveats", withBare.resolve.resolveSymbol("Loose\\Loose").caveats.some((c) => /^WARNING alias bare .*no composer\.json/.test(c)), JSON.stringify(withBare.resolve.resolveSymbol("Loose\\Loose").caveats));
+
+    put("broken/composer.json", "{not json");
+    put("broken/src/X.php", "<?php\nclass X {}\n");
+    const withBroken = make([root("root", "main"), root("alias", "broken", ["src"])]);
+    const broken = withBroken.stats().roots.find((r) => r.configured === "broken");
+    check("an alias whose composer.json can't be read is an error for that root and not scanned", /can't be read as JSON/.test(broken.error ?? "") && broken.filesScanned === 0, JSON.stringify(broken));
+    check("…reported in caveats while the other roots still answer",
+      withBroken.resolve.resolveSymbol("Pkg\\Contract").caveats.some((c) => /alias broken .* was not scanned: .*can't be read as JSON/.test(c)) && withBroken.stats().roots.find((r) => r.configured === "main").filesScanned === 5,
+      JSON.stringify(withBroken.resolve.resolveSymbol("Pkg\\Contract").caveats));
+
+    // A child root nested inside the main root, with rules that disagree with the parent's.
+    // The user's example: the parent includes packages/, the child excludes tests/.
+    put("nest/composer.json", LARAVEL);
+    put("nest/packages/foo/src/Bar.php", "<?php\nnamespace Foo;\nclass Bar extends Base {}\n");
+    put("nest/packages/foo/src/tests/Inner.php", "<?php\nnamespace Foo;\nclass Inner extends Base {}\n");
+    put("nest/packages/foo/tests/FooTest.php", "<?php\nnamespace Foo;\nclass FooTest extends Base {}\n");
+    put("nest/packages/foo/lib/Other.php", "<?php\nnamespace Foo;\nclass Other extends Base {}\n");
+    put("nest/packages/zed/Zed.php", "<?php\nnamespace Zed;\nclass Zed extends Base {}\n");
+    const nested = make(
+      [root("root", "nest"), root("alias", "nest/packages/foo", ["src", "lib"], ["tests"])],
+      { include: ["packages"] },
+    );
+    const nstats = nested.stats();
+    const child = nstats.roots.find((r) => r.configured === "nest/packages/foo");
+    const parent = nstats.roots.find((r) => r.configured === "nest");
+    const edges = nested.resolve.resolutionTable(["declaration"]).map((e) => `${e.root === join(base, "nest") ? "parent" : e.root === join(base, "nest/packages/foo") ? "child" : e.root}:${e.declaredIn}`).sort();
+    check("a file under a child root is grouped under the child, with a path relative to it",
+      edges.includes("child:src/Bar.php") && !edges.some((e) => e.startsWith("parent:packages/foo/")), JSON.stringify(edges));
+    check("a parent file outside the child stays with the parent", edges.includes("parent:packages/zed/Zed.php"), JSON.stringify(edges));
+    check("the child's exclude wins: files the parent reaches under excluded names aren't indexed",
+      !edges.some((e) => /FooTest|Inner/.test(e)), JSON.stringify(edges));
+    check("…while the child's own include still indexes its other files", edges.includes("child:lib/Other.php") && edges.length === 3, JSON.stringify(edges));
+    check("each file is scanned once", child.filesScanned === 2 && parent.filesScanned === 1 && nstats.phpFilesScanned === 3, JSON.stringify(nstats.roots));
+    put("vend/composer.json", LARAVEL);
+    put("vend/vendor/lib/Lib.php", "<?php\nclass Lib extends Base {}\n");
+    const vend = laravelFactory.create(
+      { name: "vend", root: join(base, "vend"), adapter: "laravel", options: {}, enabled: true, aliases: [], include: ["vendor"] },
+      [root("root", "vend")],
+      ["vendor"],
+    );
+    const vstats = vend.stats().roots[0];
+    check("an include directory a global exclude rules out is reported, not scanned",
+      vstats.filesScanned === 0 && vstats.warnings.some((w) => /matched by a global or default exclude, so not scanned: vendor/.test(w)), JSON.stringify(vstats));
+
+    put("order/composer.json", LARAVEL);
+    for (const dir of ["order/pkg", "order/pkg/sub", "order/pkg/sub/deep", "order/zzz", "order/aaa"]) mkdirSync(join(base, dir), { recursive: true });
+    const ordered = make([root("root", "order"), root("alias", "order/zzz"), root("alias", "order/pkg"), root("alias", "order/pkg/sub/deep"), root("alias", "order/aaa"), root("alias", "order/pkg/sub")]);
+    check("groups: a nested alias comes before the alias it sits in, siblings in path order, the main root last",
+      ordered.stats().roots.map((r) => r.configured).join() === "order/aaa,order/pkg/sub/deep,order/pkg/sub,order/pkg,order/zzz,order",
+      ordered.stats().roots.map((r) => r.configured).join());
+    const onlySrc = make([root("root", "nest"), root("alias", "nest/packages/foo", ["src"])], { include: ["packages"] });
+    const onlySrcEdges = onlySrc.resolve.resolutionTable(["declaration"]).map((e) => e.declaredIn).sort();
+    check("the child's include wins: a child file outside it isn't indexed even though the parent reached it",
+      !onlySrcEdges.includes("lib/Other.php") && !onlySrcEdges.includes("packages/foo/lib/Other.php") && onlySrcEdges.includes("src/Bar.php"), JSON.stringify(onlySrcEdges));
+
+    put("walkmiss/composer.json", LARAVEL);
+    const missing = make([root("root", "walkmiss", ["app", "nope"])]);
+    const mstats = missing.stats().roots[0];
+    check("include directories that don't exist are reported, not ignored", mstats.warnings.some((w) => /include directories not found: app, nope/.test(w)), JSON.stringify(mstats.warnings));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
   }
 }
 
