@@ -1,16 +1,11 @@
 #!/bin/sh
-# Wrapper for INFORMATIONAL hooks. Usage: hook-open.sh <script.mjs>
+# Wrapper for informational hooks. Usage: hook-open.sh <script.mjs>
 #
-# These fail OPEN: a missing node, a missing script, or a parse error must not block a session
-# start, a prompt, a tool result, or the end of a turn. Contrast guard.sh, which fails CLOSED
-# because it wraps guardrails. Do not mix the two.
+# Fails open, visibly: every failure prints a `systemMessage` and exits 1 (non-blocking), never 0.
+# Contrast guard.sh, which wraps guardrails and fails closed. Do not mix the two.
 #
-# Failing open is not the same as failing silently. This wrapper used to `exit 0` on every failure,
-# which hid it completely: a hook that cannot start would otherwise at least show a "hook error"
-# notice. Every failure now prints a `systemMessage` (shown to the user) and exits 1 (non-blocking).
-#
-# The script name is checked against [a-z0-9-]+.mjs before it touches a path or the JSON below, so
-# it can neither escape scripts/ nor break the message's quoting.
+# The script name must match [a-z0-9-]+.mjs, so it can neither escape scripts/ nor break the
+# message's JSON quoting.
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 NAME="${1:-}"
