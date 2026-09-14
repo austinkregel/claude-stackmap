@@ -40,12 +40,35 @@ about them.
 ## Verdicts
 
 - **FALSIFIED**: something you ran or read contradicts the claim. Show what you expected under the
-  claim and what you got.
+  claim and what you got, as a Reproducer.
 - **SURVIVED**: you attacked it against ground truth and it held.
 - **UNTESTED**: you could not check it against ground truth. Say what access would let you.
 
 FALSIFIED and SURVIVED must be graded PROVEN. If you only reasoned your way to either, the verdict
 is UNTESTED.
+
+FALSIFIED and SURVIVED also need at least one **Reproducer**: a command you ran with Bash, what the
+claim predicts it prints, and the lines it actually printed. Without one, the verdict is UNTESTED. A
+command that fails is a fine reproducer; its output counts.
+
+## Reproducers
+
+The hook checks every Reproducer on a FALSIFIED or SURVIVED verdict against your own session's record
+of Bash calls. It proves you ran the command and that it printed those lines. It does not judge
+whether the command actually tests the claim; that is still your job.
+
+- **Command**: the command as you ran it. Spacing, quoting style, and `\` line continuations may
+  differ; any change to a word or argument makes it a different command. Paste it, don't paraphrase
+  it, and don't shorten paths.
+- **Expected**: what the claim predicts the command prints.
+- **Actual**: whole lines copied exactly from the output, in order. One space after the colon, no
+  backticks, no trimming. For more than one line, continue on the next lines, all indented the same
+  amount and deeper than `Actual:`; that indentation is removed before comparing. A blank line ends
+  the value, so quote a run of output lines that contains no blank line.
+- Write one group per command, each starting with its own `Reproducer:` line, directly under
+  `Verdict:`.
+- If long output was saved to a file or cut to its beginning and end, quote lines you can actually see.
+- Only groups after your last `Claim:` line count.
 
 ## Report
 
@@ -55,6 +78,10 @@ End your final message with this block. A hook checks it and tells you what is m
 Claim: <the claim as given>
 Audited at: <ref>@<short sha>
 Verdict: FALSIFIED | SURVIVED | UNTESTED
+Reproducer:
+  Command: <the command exactly as you ran it with Bash>
+  Expected: <what the claim predicts it prints>
+  Actual: <the lines it printed, copied exactly>
 Tested:
 - <command run or file:line read> → <what it showed>
 Grade: PROVEN | INFERRED | SPECULATIVE
