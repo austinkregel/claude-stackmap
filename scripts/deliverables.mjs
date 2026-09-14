@@ -161,6 +161,17 @@ export function doubleBlindProblems(text) {
   return missing;
 }
 
+/**
+ * True when a UserPromptSubmit prompt is a background-task notification rather than something the
+ * user typed. Claude Code delivers a finished background agent or command as a prompt shaped
+ * `<task-notification>\n<task-id>…</task-id>…\n</task-notification>`, with the agent's output inside;
+ * the payload carries no other marker of its origin. Such a prompt never invokes a skill, however
+ * its output mentions one.
+ */
+export function isTaskNotification(prompt) {
+  return /^<task-notification>\n<task-id>[^<\n]+<\/task-id>\n[\s\S]*\n<\/task-notification>\s*$/.test(String(prompt ?? ""));
+}
+
 /** Skills whose turn can't end until the final message carries their closing block. */
 export const ENFORCED_SKILLS = [
   { name: "review", trigger: /(^|\s)\/(stackmap:)?review(\s|$)/i, problems: reviewProblems, form: REVIEW_FORM, blocks: [REVIEW_BLOCK] },
