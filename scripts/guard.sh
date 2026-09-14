@@ -1,15 +1,10 @@
 #!/bin/sh
-# Wrapper for GUARDRAIL hooks. Usage: guard.sh <script.mjs>
+# Wrapper for guardrail hooks. Usage: guard.sh <script.mjs>
 #
-# Hooks fail OPEN by default: a crash, a timeout, or a script that cannot start lets the tool call
-# proceed, so a broken guardrail silently permits what it exists to prevent. Exit code 2 is the only
-# code that blocks unconditionally, so every internal failure here exits 2 — this wrapper fails
-# CLOSED. A guard that cannot run must not be a guard that waves things through.
+# Fails closed: every internal failure exits 2, the only code that blocks unconditionally.
+# Contrast hook-open.sh, which wraps informational hooks and fails open.
 #
-# Contrast hook-open.sh, which fails open (visibly) because it wraps informational hooks.
-#
-# The script name is checked against [a-z0-9-]+.mjs before it touches a path, so an argument like
-# ../../elsewhere.mjs cannot run a file outside scripts/.
+# The script name must match [a-z0-9-]+.mjs, so it cannot reach a file outside scripts/.
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 NAME="${1:-}"
