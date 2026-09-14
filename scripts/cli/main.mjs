@@ -11,7 +11,7 @@ const USAGE = `sm — stackmap CLI
 
   sm jsonl <file...>  [--where k=v] [--pick a,b] [--count] [--limit N] [--jq-ish path]
   sm csv   <file...>  [--where k=v] [--select a,b] [--count] [--limit N] [--delim ,]
-  sm slice <file>     --lines A-B | --bytes A-B | --head N | --tail N
+  sm slice <file>     --lines A-B | --bytes A-B | --head N | --tail N   (a range past EOF exits 3)
   sm wait  --cmd '<shell>' [--until '<regex>'] [--fail '<regex>'] [--every S] [--timeout S]
   sm dupes <dir>      detect byte-identical / signature-identical .jsonl files
 
@@ -21,9 +21,10 @@ Use --json for machine-readable output on any command.`;
 
 const argv = process.argv.slice(2);
 const cmd = argv[0];
-if (!cmd || cmd === "-h" || cmd === "--help" || !COMMANDS[cmd]) {
+const wantsHelp = !cmd || cmd === "-h" || cmd === "--help";
+if (wantsHelp || !COMMANDS[cmd]) {
   console.log(USAGE);
-  process.exit(cmd && !COMMANDS[cmd] ? 2 : 0);
+  process.exit(wantsHelp ? 0 : 2);
 }
 try {
   const code = await COMMANDS[cmd](argv.slice(1));
