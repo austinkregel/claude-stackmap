@@ -7,9 +7,7 @@ argument-hint: "[PR number, branch, or path]"
 
 Target: **$ARGUMENTS**
 
-Blind duplicate review is close to superstition. Pairwise error correlation between same-model
-reviewers is ≈0.77, so three identical passes are worth roughly **1.3 independent ones, not 3** —
-while costing 3x. This skill spends that budget on independence instead of repetition.
+Review once per independent axis; do not repeat identical passes.
 
 > **Enforced.** Invoking this skill arms a `Stop` hook. The turn cannot end until the final
 > message carries a `Reviewed at <sha>` line. This is a precondition, not a suggestion.
@@ -23,22 +21,19 @@ git rev-parse --short HEAD && git status --porcelain | wc -l
 ```
 
 Every claim in the review is scoped to that sha. Write it into the output as
-`reviewed at <sha>, fetched <timestamp>`. A review whose sha is never printed cannot be checked
-afterwards, and reviewing a stale cached branch looks identical to reviewing the right one.
+`reviewed at <sha>, fetched <timestamp>`.
 
 If the target is a PR, confirm the sha you fetched matches the PR head. Do not review a cached
 branch. The `SessionStart` freshness context states the local position; verify the remote one.
 
 ## 2. Check what is already known
 
-Call `note_search` with the area under review before investigating. A prior conclusion — and its
-drift report — is cheaper than re-deriving it, and re-derivation is the dominant waste in
-long-running work. If a note answers part of the review, cite its id rather than repeating it.
+Call `note_search` with the area under review before investigating, and read each hit's drift
+report. If a note answers part of the review, cite its id rather than repeating it.
 
 ## 3. Review along independent axes, not in duplicate
 
-Run **one** pass per axis. Different axes fail differently, which is where the independence comes
-from. Skip an axis that plainly does not apply, and say that you skipped it.
+Run **one** pass per axis. Skip an axis that plainly does not apply, and say that you skipped it.
 
 | Axis | Looks for |
 |---|---|
@@ -50,7 +45,7 @@ from. Skip an axis that plainly does not apply, and say that you skipped it.
 
 ## 4. Ground the verdict in non-LLM signal
 
-An LLM cannot reliably self-correct without an external signal. Prefer, in order:
+Prefer, in order:
 
 1. Run the tests. Report actual output, including failures.
 2. Run the type-checker / linter.
@@ -76,5 +71,4 @@ Verification: <what was actually run>.
 
 If the review established something durable — a real constraint, a subtle invariant, a wrong turn
 worth not repeating — call `note_write` with the affected files so the conclusion is stamped
-against their content. Use `status: "retracted"` for a disproved earlier belief; it is kept at low
-weight precisely so it is not rediscovered.
+against their content. Use `status: "retracted"` for a disproved earlier belief.
