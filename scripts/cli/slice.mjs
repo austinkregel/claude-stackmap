@@ -1,57 +1,88 @@
 import { createReadStream, statSync, openSync, readSync, closeSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { parseArgs } from "./args.mjs";
+import { parseArgs, numberFlag } from "./args.mjs";
+
+/** `A-B` with A <= B, at least `min`. */
+function range(flag, value, min) {
+  const m = /^(\d+)-(\d+)$/.exec(String(value));
+  if (!m || Number(m[1]) < min || Number(m[1]) > Number(m[2])) {
+    throw new Error(`--${flag} expects A-B with ${min} <= A <= B, got "${value === true ? "" : value}"`);
+  }
+  return { from: Number(m[1]), to: Number(m[2]) };
+}
 
 /**
  * Slice a large file without loading it. Always reports total size/lines alongside what was
- * emitted, so a truncated read is visible instead of silent.
+ * emitted. A `--lines` or `--bytes` range that reaches past the end of the file is a short read
+ * (exit 3); `--head`/`--tail` on a shorter file return what exists.
  */
 export async function slice(argv) {
   const { flags, positionals } = parseArgs(argv);
   const file = positionals[0];
-  if (!file) throw new Error("usage: sm slice <file> --lines A-B | --bytes A-B | --head N | --tail N");
+  if (!file) throw new Error("usage: sm slice <file> --lines A-B | --bytes A-B | --head N | --tail N [--json]");
+  const asJson = Boolean(flags.json);
   const size = statSync(file).size;
 
-  if (flags.bytes && flags.bytes !== true) {
-    const m = /^(\d+)-(\d+)$/.exec(String(flags.bytes));
-    if (!m) throw new Error("--bytes expects A-B");
-    const [start, end] = [Number(m[1]), Math.min(Number(m[2]), size)];
-    const len = Math.max(0, end - start);
+  if ("bytes" in flags) {
+    const { from, to } = range("bytes", flags.bytes, 0);
+    const end = Math.min(to, size);
+    const len = Math.max(0, end - from);
     const fd = openSync(file, "r");
+    let got;
+    const buf = Buffer.alloc(len);
     try {
-      const buf = Buffer.alloc(len);
-      const got = readSync(fd, buf, 0, len, start);
+      got = readSync(fd, buf, 0, len, from);
+    } finally {
+      closeSync(fd);
+    }
+    const short = got < to - from;
+    const stats = { file, sizeBytes: size, from, to, got, short };
+    if (asJson) console.log(JSON.stringify({ bytes: buf.subarray(0, got).toString("base64"), _stats: stats }));
+    else {
       process.stdout.write(buf.subarray(0, got));
-      console.error(`-- bytes ${start}-${start + got} of ${size}${got < len ? ` (SHORT READ: wanted ${len}, got ${got})` : ""}`);
-      return got < len ? 3 : 0;
-    } finally { closeSync(fd); }
+      console.error(`-- bytes ${from}-${from + got} of ${size}${short ? ` (SHORT READ: wanted ${to - from}, got ${got})` : ""}`);
+    }
+    return short ? 3 : 0;
   }
 
   let want = null;
-  if (flags.lines && flags.lines !== true) {
-    const m = /^(\d+)-(\d+)$/.exec(String(flags.lines));
-    if (!m) throw new Error("--lines expects A-B (1-indexed, inclusive)");
-    want = { from: Number(m[1]), to: Number(m[2]) };
-  } else if (flags.head) want = { from: 1, to: Number(flags.head) };
+  let mode = null;
+  if ("lines" in flags) {
+    want = range("lines", flags.lines, 1);
+    mode = "lines";
+  } else if ("head" in flags) {
+    want = { from: 1, to: numberFlag(flags, "head", { min: 1, integer: true }) };
+    mode = "head";
+  }
+  const tailN = "tail" in flags ? numberFlag(flags, "tail", { min: 1, integer: true }) : null;
+  if (tailN) mode = "tail";
 
-  const tailN = flags.tail ? Number(flags.tail) : null;
   const ring = [];
-  let total = 0, emitted = 0;
+  const lines = [];
+  let total = 0;
   const rl = createInterface({ input: createReadStream(file), crlfDelay: Infinity });
   for await (const line of rl) {
     total++;
-    if (tailN) { ring.push(line); if (ring.length > tailN) ring.shift(); continue; }
-    if (!want) continue;
-    if (total >= want.from && total <= want.to) { console.log(line); emitted++; }
+    if (tailN) {
+      ring.push(line);
+      if (ring.length > tailN) ring.shift();
+    } else if (want && total >= want.from && total <= want.to) {
+      lines.push(line);
+    }
   }
-  if (tailN) { for (const l of ring) console.log(l); emitted = ring.length; }
+  const emitted = tailN ? ring : lines;
 
-  if (!want && !tailN) {
-    console.error(`-- ${file}: ${total} lines, ${size} bytes. Pass --lines/--head/--tail to emit a slice.`);
+  if (!mode) {
+    if (asJson) console.log(JSON.stringify({ _stats: { file, sizeBytes: size, totalLines: total } }));
+    else console.error(`-- ${file}: ${total} lines, ${size} bytes. Pass --lines/--head/--tail to emit a slice.`);
     return 0;
   }
-  const requested = tailN ?? (want.to - want.from + 1);
-  const short = emitted < requested && (tailN ? total > emitted : want.to <= total);
-  console.error(`-- emitted ${emitted} of ${total} lines (${size} bytes total)${short ? " (SHORT: fewer lines than requested)" : ""}`);
+  const short = mode === "lines" && want.to > total;
+  const stats = { file, sizeBytes: size, totalLines: total, mode, ...(want ? want : { last: tailN }), emitted: emitted.length, short };
+  if (asJson) console.log(JSON.stringify({ lines: emitted, _stats: stats }));
+  else {
+    for (const l of emitted) console.log(l);
+    console.error(`-- emitted ${emitted.length} of ${total} lines (${size} bytes total)${short ? ` (SHORT: the file ends at line ${total})` : ""}`);
+  }
   return short ? 3 : 0;
 }
