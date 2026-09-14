@@ -344,6 +344,7 @@ npm run check              # typecheck only
 npm run build              # compile to dist/
 npm test                   # every suite
 npm run bench              # note retrieval latency and rank quality
+npm run plugin-test        # hooks.json wiring, names, and closing-block drift
 npm run shell-tokens-test  # the shell parser the Bash guards evaluate
 npm run guard-test         # destructive-command and commit-message rules, guard.sh
 npm run truncate-test      # no-truncate
@@ -352,14 +353,15 @@ npm run house-rules-test   # house rules: extend/replace/disable, and every fail
 npm run hooks-test         # hook-open.sh, freshness, fetch sanity, config.example.json
 npm run skill-check-test   # closing blocks for /review and /double-blind
 npm run audit-test         # the auditor's report check
+npm run cli-test           # every sm subcommand: output, counts, --json, exit codes
+npm run config-test        # config resolution, validation, index selection, stack detection
 npm run extract-test       # PHP extractors + adapter wiring, on inline fixtures
 npm run notes-test         # note store
-npm run smoke              # end-to-end test over stdio, including failure paths
+npm run smoke              # every MCP tool over stdio on a Laravel fixture, including failure paths
 ```
 
-The hook suites need no build and use temporary config and state directories. `extract-test`,
-`notes-test`, and `smoke` need `npm run build` first. `smoke` asserts against your configured
-indexes, so it needs at least one working index.
+Every suite uses temporary config, state, and fixtures, so none needs or reads your own config.
+`config-test`, `extract-test`, `notes-test`, and `smoke` need `npm run build` first.
 
 ## Layout
 
