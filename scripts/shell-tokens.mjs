@@ -1,17 +1,11 @@
 /**
- * A shell command parser for the guardrails.
- *
- * Guards used to test regexes against raw command text, which fails in both directions: a quoted
- * `;` split `git commit -m "wip; git merge later"` into a fake `git merge` (over-block), and text
- * inside double quotes was stripped wholesale, hiding `"$(npm test | tail -5)"` (under-block).
- * Parsing the command the way the shell does removes both classes: quoted text is data, while
- * command substitutions inside quotes are still commands.
+ * A shell command parser for the guardrails. Quoted text is data; command substitutions inside
+ * quotes are still commands.
  *
  * Output is deliberately flat. `if a; then b | tail; fi` becomes the pipelines `if a`, `then b |
  * tail`, and `fi`, with leading reserved words (`then`, `do`, `!`, `{` …) moved off the command
- * position into `stage.keywords`. Guards only need "which program runs, with which arguments,
- * reading from what", and the flat form answers that without a full grammar. `case` is the one
- * construct parsed structurally, because its `pattern)` syntax is otherwise an unmatched `)`.
+ * position into `stage.keywords`. `case` is the one construct parsed structurally, because its
+ * `pattern)` syntax is otherwise an unmatched `)`.
  *
  * What it understands: single, double, and ANSI-C quotes; backslash escapes and line
  * continuations; `$(…)`, backticks, `$((…))`, `${…}` (including inside double quotes); process
@@ -20,11 +14,10 @@
  * comments; function definitions; `case … esac`.
  *
  * Syntax the shell itself would reject (an unterminated quote, an unmatched `)`, a pipe with no
- * command) throws ShellParseError. Guards treat that as "cannot evaluate" and fail closed; the
- * command would not have run anyway. A heredoc with no terminator is NOT an error: bash warns and
- * uses the rest of the input as the body, and so does this parser.
+ * command) throws ShellParseError, which guards treat as "cannot evaluate" and fail closed. A
+ * heredoc with no terminator is not an error: like bash, the rest of the input becomes the body.
  *
- * Known limits, stated rather than guessed around: zsh-only syntax (glob qualifiers like `*(.)`),
+ * Known limits: zsh-only syntax (glob qualifiers like `*(.)`),
  * extglob patterns `!(x)`, and `[[ … ]]` operators are not modelled; `eval` arguments, aliases,
  * functions, and scripts on disk are not followed.
  */
