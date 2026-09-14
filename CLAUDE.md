@@ -268,7 +268,10 @@ Config entries are validated one at a time (`parseConfig`):
 - Omitted means `selectIndex`'s default.
 - `acrossScope` gives each project its own outcome, and a project that can't answer is an error
   entry, never dropped.
-- `index.ts` rejects arguments a tool doesn't declare, and non-numeric `limit`/`offset`.
+- `index.ts` rejects arguments a tool doesn't declare. Argument values go through `src/args.ts`
+  (`countArg`, `stringArg`, `stringListArg`, `booleanArg`). A value of the wrong type is an error that
+  shows it as JSON. Never coerce an argument with `String()`, `Boolean()`, or a template (an object
+  becomes `[object Object]`), and never fall back to a default for anything but an absent value.
 
 `walkFiles` returns sorted files, and reports missing, unreadable, and excluded configured
 directories.
