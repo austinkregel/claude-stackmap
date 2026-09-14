@@ -1,14 +1,6 @@
 #!/usr/bin/env node
 /**
- * Regression suite for the PHP extractors and the Laravel adapter wiring.
- *
- * Every case here is grounded in a defect found by running stackmap against a large real
- * Laravel codebase (2,770 files), not in an invented example:
- *   D1  Route::bind('report', ...) landed in the table as a container binding (3 false rows).
- *   D2  A foreach over a 14-entry class const bound 14 singletons through a computed key.
- *       The whole site was dropped silently, so resolve() answered "nothing binds this".
- *   D3  All 54 (in fact 56 — two are multi-line chains) when()->needs()->give() sites were absent.
- *   D4  implementedBy/implements came only from bindings, never from extends/implements.
+ * Suite for the PHP extractors and the Laravel adapter wiring, using inline fixtures.
  */
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,7 +19,7 @@ const check = (label, cond, detail = "") => {
 };
 const php = (body) => `<?php\nnamespace App\\Providers;\n\n${body}\n`;
 
-console.log("-- D1: receiver must be the container --");
+console.log("-- receiver must be the container --");
 {
   const src = php(`
 use Illuminate\\Support\\Facades\\Route;
@@ -76,7 +68,7 @@ class Container
   check("app() and the App facade are container receivers", r.bindings.length === 2, JSON.stringify(r.bindings));
 }
 
-console.log("\n-- D2: a computed abstract must never be dropped silently --");
+console.log("\n-- a computed abstract must never be dropped silently --");
 {
   const src = php(`
 use App\\Contracts\\Models\\HasComparatorsContract;
@@ -126,7 +118,7 @@ class InventoryServiceProvider
     JSON.stringify(r.bindings));
 }
 
-console.log("\n-- D3: contextual when()->needs()->give() --");
+console.log("\n-- contextual when()->needs()->give() --");
 {
   const src = php(`
 use App\\Services\\KeywordGeneratorService;
@@ -184,7 +176,7 @@ class P
   check("$query->when() is not a contextual binding", r.contextual.length === 0, JSON.stringify(r.contextual));
 }
 
-console.log("\n-- D4: PHP declarations --");
+console.log("\n-- PHP declarations --");
 {
   const src = `<?php
 namespace App\\Filters\\InventoryFilter;
