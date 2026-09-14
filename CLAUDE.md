@@ -44,8 +44,8 @@ node scripts/audit-test.mjs         # the auditor's report check, Reproducers ag
 node scripts/cli-test.mjs           # every sm subcommand through bin/sm: output, counts, --json, exit codes
 node scripts/config-test.mjs        # config resolution, per-entry validation, scope, detection, roots, cache, addIndex  (needs dist/)
 node scripts/extract-test.mjs       # PHP extractors + adapter wiring, several roots, inline fixtures  (needs dist/)
-node scripts/notes-test.mjs         # note store: supersession, retraction weighting, drift, stamps across roots  (needs dist/)
-node scripts/smoke.mjs              # every MCP tool over stdio: scope, aliases, duplicates, add-index, plus a no-config server  (needs dist/)
+node scripts/notes-test.mjs         # note store: supersession, drift, stamps across roots, file format, typed notes, note_query, tokenizer  (needs dist/)
+node scripts/smoke.mjs              # every MCP tool over stdio: scope, aliases, duplicates, add-index, typed notes, notesDir change, plus a no-config server  (needs dist/)
 ```
 
 Every suite uses temporary config, state, notes, and fixtures (`$STACKMAP_CONFIG`, `$STACKMAP_STATE`,
@@ -64,7 +64,8 @@ Resolution order, first hit wins: `$STACKMAP_CONFIG`, `$XDG_CONFIG_HOME/stackmap
 Adding a project is a config edit, or the `stackmap_add_index` tool, as long as its stack has an
 adapter.
 
-Notes live under `notesDir` (default `~/.config/stackmap/notes/`, one markdown file per note).
+Notes live under `notesDir` (default `~/.config/stackmap/notes/`): one markdown file per note, plus a
+`<id>.json` data file beside each typed note.
 Per-session hook state (`sessions/<id>.review.json`) lives in `~/.stackmap/`, or under
 `$STACKMAP_STATE` (must be absolute). `stateDir()` in `scripts/hook-lib.mjs` is the only place that
 path is resolved.
@@ -284,17 +285,41 @@ that isn't on disk yields `exists: false` with the candidate path.
 
 ### Note store: provenance and caching invariants
 
-`src/notes/store.ts` serializes notes as markdown with hand-rolled frontmatter; change `serialize`
-and `deserialize` in lockstep. A malformed note is skipped. `note_write` content-hashes every file
-the note is about; `drift()` re-hashes at read time.
+`src/notes/store.ts` writes notes in frontmatter format 2 (a `format: 2` line, every value JSON);
+change `serialize` and `parseFormat2` in lockstep. `parseLegacy` only reads the older format; a note
+is rewritten as format 2 on its next write. `note_write` content-hashes every file the note is about;
+`drift()` re-hashes at read time.
+
+A file that can't be read as a note is never skipped: `scan()` lists it in `malformed()`, every note
+tool returns it as `malformedFiles`, and `get()` throws for it. That includes an unknown status, a data
+file with no note or beside an untyped note, and a typed note whose data file is missing, unparseable,
+or doesn't match.
+
+Typed notes are two files: `<id>.md` names `schema`, `schema_version`, and the `data_sha256` of
+`<id>.json` (`{schema, version, data}`). `write()` writes the data file first and the note second,
+each through a temporary file and a rename. An interrupted pair leaves an orphan data file or a hash
+mismatch, and both are reported on read. Note ids that could leave the notes directory are refused
+(`checkId`).
+
+`src/notes/schemas.ts` holds the shipped schemas as `name@version`. `notes-test` pins a sha256 of each
+one's JSON Schema, so changing a shape means a new version, never an edit under the old one. Records
+of another version, or that fail validation, are reported in `note_query`'s `invalid` and `note_get`'s
+`validation`, never treated as current. `src/notes/query.ts` checks a filter's parameters against the
+schema's JSON Schema before running it, so an unknown field is an error, not an empty result.
+
+`index.ts` keeps one `NoteStore` per process, keyed by the expanded `notesDir`. A changed `notesDir`
+gets a new store, and the old one's watcher is closed.
 
 `src/notes/search.ts` is Okapi BM25 (k1 1.2, b 0.75) with a 3x title/tag boost over an inverted
-index. Cache invalidation keys:
+index. A typed note's schema name and every key and value of its data are indexed at body weight with
+`dataTokens`, which keeps numbers and short tokens whole. Queries are tokenized both ways. The
+tokenizer's rules are user-approved and pinned by `notes-test`; don't change them silently. Cache
+invalidation keys:
 
 | Cache | Keyed / invalidated by |
 |---|---|
 | file hashes (`hashCache`) | `mtimeMs:size` |
-| parsed notes (`NoteStore.cache`) | `mtimeMs:size` per file |
+| parsed notes (`NoteStore.cache`) | `mtimeMs:size` of the note **and** of its `.json` data file |
 | directory listing (`listCache`) | `fs.watch` dirty flag **plus** a 2s wall-clock backstop |
 | tokenized docs (`docCache`) | `WeakMap` on `Note` object identity |
 
