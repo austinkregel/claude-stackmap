@@ -165,6 +165,12 @@ try {
     check("an empty scope", r.isError && /non-empty list/.test(r.text), r.show);
     r = await call("stackmap_bindings", { limit: "ten" });
     check("a non-numeric limit is an error, not a silent default", r.isError && /'limit' must be a number of at least 1, got "ten"/.test(r.text), r.show);
+    r = await call("stackmap_bindings", { kind: { all: true } });
+    check("a kind that isn't a string is an error, not the default", r.isError && /'kind' must be a non-empty string, got \{"all":true\}/.test(r.text), r.show);
+    r = await call("stackmap_bindings", { filter: ["stripe"] });
+    check("a filter that isn't a string is an error, not ignored", r.isError && /'filter' must be a non-empty string, got \["stripe"\]/.test(r.text), r.show);
+    r = await call("note_write", { title: "tagged", body: "x", tags: [{ name: "payments" }] });
+    check("a note tag that is an object is an error, not \"[object Object]\"", r.isError && /tags\[0\] = \{"name":"payments"\}/.test(r.text) && !r.text.includes("[object Object]"), r.show);
     r = await call("stackmap_resolve", { symbol: "X", bogus: 1 });
     check("an undeclared argument is an error, not ignored", r.isError && /unknown argument "bogus"/.test(r.text), r.show);
 
