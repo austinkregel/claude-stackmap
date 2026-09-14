@@ -93,8 +93,7 @@ AGENTS.md can override a rule by saying so explicitly.
 ## Commits
 <!-- id: commits -->
 - Commit finished, tested work; don't mix work in progress into it.
-- Stay on the current branch. Don't create branches or pull requests unless asked; if a guard
-  blocks a commit on a protected branch, ask the user which branch to use.
+- Commit finished work before starting parallel agents; run agents that edit code in their own worktrees. Don't open pull requests unless asked.
 - Describe the change in prose. Don't paste commands into commit messages.
 
 ## Write it down
