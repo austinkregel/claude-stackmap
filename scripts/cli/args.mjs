@@ -40,7 +40,7 @@ export function project(row, pick) {
   return out;
 }
 
-/** Uniform stats footer — the thing a hand-typed one-liner always omits. */
+/** Uniform stats footer. */
 export function report(stats, asJson) {
   if (asJson) { console.log(JSON.stringify({ _stats: stats })); return; }
   const parts = Object.entries(stats).map(([k, v]) => `${k}=${v}`);
