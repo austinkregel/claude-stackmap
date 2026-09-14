@@ -1,4 +1,7 @@
-import type { Note, NoteStore, Drift } from "./store.js";
+import type { Note, NoteStore, Drift, RootsLookup } from "./store.js";
+
+/** A note's project roots, looked up from the note's own `repo`. */
+export type RootsFor = (repo: string | null) => RootsLookup;
 
 /** Standing authority per status. Retracted stays non-zero so a recorded wrong turn still surfaces. */
 export const STATUS_WEIGHT: Record<Note["status"], number> = {
@@ -92,7 +95,7 @@ function indexFor(docs: Doc[]): Index {
 export function scoreNotes(
   store: NoteStore,
   query: string,
-  repoRoot: string | null,
+  rootsFor: RootsFor,
   opts: { includeRetracted?: boolean; repo?: string | null } = {},
 ): ScoredNote[] {
   const notes = store.list().filter((n) => {
@@ -138,7 +141,7 @@ export function scoreNotes(
   const out: ScoredNote[] = [];
   for (const i of candidates) {
     const note = docs[i]!.note;
-    const drift = store.drift(note, repoRoot);
+    const drift = store.drift(note, rootsFor(note.repo));
     const changed = drift.filter((x) => x.state !== "unchanged");
     const driftFactor = drift.length === 0 ? 1 : 1 - 0.5 * (changed.length / drift.length);
     const base = terms.length === 0 ? 1 : (acc.get(i) ?? 0);
