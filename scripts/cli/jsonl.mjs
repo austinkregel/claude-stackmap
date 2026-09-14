@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
-import { parseArgs, buildPredicate, project, report } from "./args.mjs";
+import { parseArgs, buildPredicate, project, report, numberFlag } from "./args.mjs";
 
 /** Resolve a dotted path like `message.content.0.text` against a row. */
 function dig(row, path) {
@@ -11,7 +11,7 @@ export async function jsonl(argv) {
   const { flags, positionals } = parseArgs(argv);
   if (positionals.length === 0) throw new Error("usage: sm jsonl <file...> [--where k=v] [--pick a,b] [--count]");
   const pred = buildPredicate(flags.where);
-  const limit = flags.limit ? Number(flags.limit) : Infinity;
+  const limit = numberFlag(flags, "limit", { integer: true }) ?? Infinity;
   const asJson = Boolean(flags.json);
   const stats = { files: 0, read: 0, matched: 0, parseErrors: 0, emitted: 0 };
   const out = [];
