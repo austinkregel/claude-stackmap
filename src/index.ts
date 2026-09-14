@@ -10,7 +10,7 @@ import { existsSync } from "node:fs";
 import { NoteStore, type RootsLookup } from "./notes/store.js";
 import { noteWrite, noteSearch, noteGet, noteSupersede, noteQuery, noteSchemas } from "./notes/tools.js";
 import { NOTE_SCHEMAS } from "./notes/schemas.js";
-import { countArg } from "./args.js";
+import { countArg, stringArg } from "./args.js";
 import { COMPARATORS } from "./notes/query.js";
 
 const SCOPE_ARG = {
@@ -286,7 +286,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     if (req.params.name.startsWith("note_")) {
       const store = noteStoreFor(config.notesDir);
       const lookup = (repo: string | null) => rootsFor(config, repo);
-      if (req.params.name === "note_write") return text(noteWrite(store, args, lookup(args.repo ?? null)));
+      if (req.params.name === "note_write") return text(noteWrite(store, args, lookup));
       if (req.params.name === "note_search") return text(noteSearch(store, args, lookup));
       if (req.params.name === "note_get") return text(noteGet(store, args, lookup));
       if (req.params.name === "note_supersede") return text(noteSupersede(store, args));
@@ -317,12 +317,12 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
 
     if (req.params.name === "stackmap_bindings") {
-      const kindArg = typeof args.kind === "string" ? args.kind : "bindings";
+      const kindArg = stringArg("stackmap_bindings", "kind", args.kind) ?? "bindings";
       const kinds = KIND_SETS[kindArg];
       if (!kinds) return failure(`stackmap_bindings: unknown kind "${kindArg}". Known: ${Object.keys(KIND_SETS).join(", ")}.`);
       const limit = countArg("stackmap_bindings", "limit", args.limit, 100, 1);
       const offset = countArg("stackmap_bindings", "offset", args.offset, 0, 0);
-      const needle = typeof args.filter === "string" ? args.filter.toLowerCase() : null;
+      const needle = stringArg("stackmap_bindings", "filter", args.filter)?.toLowerCase() ?? null;
       const outcomes = acrossScope(config, scope, (adapter, idx) => requireCapability(adapter, "resolve", idx.name, "stackmap_bindings").resolutionTable(kinds));
 
       const totalByIndex: Record<string, number> = {};
