@@ -95,7 +95,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh audit-check.mjs",
-            "timeout": 10
+            "timeout": 60
           }
         ]
       }
