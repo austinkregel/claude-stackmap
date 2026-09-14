@@ -1,11 +1,7 @@
 #!/usr/bin/env node
 /**
  * Suite for the informational hooks and their wrapper: hook-open.sh, freshness.mjs, and
- * fetch-sanity.mjs.
- *
- * These fail OPEN, which is exactly why they need tests: a fail-open hook that silently stopped
- * working looks identical to one that had nothing to say. Each check asserts both the exit code
- * and what the user or Claude would actually see.
+ * fetch-sanity.mjs. Each check asserts both the exit code and what the user or Claude would see.
  */
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -52,8 +48,7 @@ try {
 
   console.log("\n-- config.example.json stays valid --");
   {
-    // The example documents every hook config key; if it drifted from hook-config.mjs, every guard
-    // would fail closed for anyone who copied it.
+    // An example that drifts from hook-config.mjs makes every guard fail closed for anyone who copies it.
     const example = join(scripts, "..", "config.example.json");
     const guarded = spawnSync(join(scripts, "guard.sh"), ["guard.mjs"], {
       input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: sandbox, tool_input: { command: "ls" } }),
@@ -100,7 +95,7 @@ try {
 
     git(["remote", "set-url", "origin", join(sandbox, "gone.git")], repo);
     ctx = contextOf(session(repo));
-    check("regression: a failed fetch is stated, not swallowed", /WARNING: git fetch failed/.test(ctx ?? ""), ctx);
+    check("a failed fetch is stated, not swallowed", /WARNING: git fetch failed/.test(ctx ?? ""), ctx);
     check("…and the counts are marked as possibly stale", /may be stale/.test(ctx ?? ""), ctx);
 
     r = session(sandbox);
