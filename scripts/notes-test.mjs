@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Note-store regression suite: supersession, retraction weighting, and provenance drift. */
+/** Note-store suite: supersession, retraction weighting, and provenance drift. */
 import { mkdtempSync, rmSync, writeFileSync, appendFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -37,7 +37,7 @@ try {
   check("no caveat while ground is intact", r.results[0].caveat === null, String(r.results[0].caveat));
   const cleanScore = r.results[0].score;
 
-  console.log("\n-- the load-bearing test: change the file underneath the note --");
+  console.log("\n-- drift: change the file underneath the note --");
   appendFileSync(join(repo, "service.php"), "// edited after the conclusion was written\n");
   r = noteSearch(store, { query: "budget closure" }, repo);
   check("drift now reports 'changed'", r.results[0].drift[0].state === "changed", JSON.stringify(r.results[0].drift));
