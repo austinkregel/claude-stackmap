@@ -10,9 +10,12 @@ Target: **$ARGUMENTS**
 Review once per independent axis; do not repeat identical passes.
 
 > **Enforced.** Invoking this skill arms a `Stop` hook. The turn cannot end until the final
-> message carries a `Reviewed at <sha>` line. This is a precondition, not a suggestion.
+> message carries the closing block in step 6.
 
 ## 1. Stamp the ground first
+
+The target names the ref under review. If no target is given and the current branch isn't `main`,
+ask the user which ref to review before going further.
 
 Before reading any code, record and state:
 
@@ -54,10 +57,22 @@ Prefer, in order:
 
 State which of these you actually did. "Looks correct" without a signal is not a verdict.
 
-## 5. Report
+## 5. Audit what you are about to report
 
-For each finding: file:line, the axis, a concrete failure scenario, and the evidence type
-(test / type-checker / execution / reasoning). Rank by severity.
+Send every highest-severity finding, and every finding whose only evidence is reasoning, to
+`stackmap:adversarial-auditor`, in parallel. Each brief gives the finding as a claim, its evidence,
+and the reviewed ref. The auditor sees committed code only; a finding in an uncommitted file is
+reported as unaudited.
+
+- FALSIFIED: drop it from the findings and list it under "Falsified" with the counter-evidence.
+- SURVIVED: keep it, citing what the auditor tested.
+- UNTESTED: keep it, marked untested, with what the auditor needed.
+
+## 6. Report
+
+For each finding: file:line, the axis, a concrete failure scenario, the evidence type
+(test / type-checker / execution / reasoning), and the audit verdict if it had one. Rank by
+severity.
 
 Close with:
 
@@ -65,9 +80,12 @@ Close with:
 Reviewed at <sha>, <N> uncommitted file(s) present, <timestamp>.
 Axes covered: <list>. Axes skipped: <list, with why>.
 Verification: <what was actually run>.
+Audited: <n> — <n> survived, <n> falsified, <n> untested
 ```
 
-## 6. Record what will outlive the session
+If nothing met the bar for an audit, write `Audited: none — <why>`.
+
+## 7. Record what will outlive the session
 
 If the review established something durable — a real constraint, a subtle invariant, a wrong turn
 worth not repeating — call `note_write` with the affected files so the conclusion is stamped
