@@ -3,7 +3,7 @@
  * Review-enforcement suite: arming precision, blocking, satisfaction, and loop safety.
  *
  * Runs against a temporary state directory ($STACKMAP_STATE), so it never touches real session
- * markers. It used to write into ~/.config/stackmap/sessions directly.
+ * markers.
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
