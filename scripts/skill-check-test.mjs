@@ -73,6 +73,22 @@ try {
   clearMarkers();
   arm("see docs/review/notes and the double-blind section");
   check("a path or a bare word does not arm", !existsSync(reviewMarker) && !existsSync(dbMarker));
+  // The envelope shape Claude Code 2.1.231 delivered for a finished background agent.
+  const notification = (result) =>
+    "<task-notification>\n<task-id>abdc127a1fb3b16aa</task-id>\n<tool-use-id>toolu_016vYpaKGe2RRciicARSya1a</tool-use-id>\n" +
+    "<output-file>/tmp/tasks/abdc127a1fb3b16aa.output</output-file>\n<status>completed</status>\n" +
+    `<summary>Agent "probe" finished</summary>\n<result>${result}</result>\n` +
+    "<usage><subagent_tokens>1</subagent_tokens><tool_uses>0</tool_uses><duration_ms>1</duration_ms></usage>\n</task-notification>";
+  arm(notification("the fix touches the /review and /double-blind skills"));
+  check("a background-task notification whose output mentions the skills does not arm", !existsSync(reviewMarker) && !existsSync(dbMarker));
+  arm(notification("done\n/review x\nthen /double-blind y"));
+  check("…even with the commands on lines of their own", !existsSync(reviewMarker) && !existsSync(dbMarker));
+  arm("/review <task-notification> handling");
+  check("a typed prompt that merely mentions the envelope still arms", existsSync(reviewMarker));
+  clearMarkers();
+  arm(`${notification("ok")}\n/review x`);
+  check("text typed after a notification's closing tag is not a notification, so it arms", existsSync(reviewMarker));
+  clearMarkers();
 
   console.log("\n-- review --");
   arm("/review x");
