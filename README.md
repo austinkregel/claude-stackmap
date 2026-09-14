@@ -283,8 +283,9 @@ is shown why.
 - **`stackmap:adversarial-auditor`** tries to falsify one claim against the real code, commands,
   and tests. It runs in its own worktree (which Claude Code starts at the remote's default branch)
   and checks out the ref the brief names, or `main`. Its report ends with `Claim`, `Audited at: <ref>@<sha>`, `Verdict`
-  (FALSIFIED, SURVIVED, or UNTESTED), `Tested`, `Grade`, `Unchecked`, and, for UNTESTED, `Needs`.
-  FALSIFIED and SURVIVED must be graded PROVEN.
+  (FALSIFIED, SURVIVED, or UNTESTED), one or more `Reproducer` groups (`Command`, `Expected`,
+  `Actual`), `Tested`, `Grade`, `Unchecked`, and, for UNTESTED, `Needs`. FALSIFIED and SURVIVED must
+  be graded PROVEN and carry at least one Reproducer; without one the verdict is UNTESTED.
 - **`/review`** reviews along independent axes and sends its highest-severity and reasoning-only
   findings to the auditor. Its closing block adds an `Audited:` count.
 - **`/double-blind`** has 2–3 agents answer one falsifiable claim by different methods, blind to
@@ -293,11 +294,30 @@ is shown why.
 
 Both skills ask which ref to use when none is named and the current branch isn't `main`.
 
-`audit-check` (SubagentStop, auditor only) keeps the auditor running until its report is complete.
+`audit-check` (SubagentStop, auditor only) keeps the auditor running until its report is complete
+and every Reproducer on a FALSIFIED or SURVIVED verdict matches its own transcript
+(`agent_transcript_path`):
+- the command must be one the auditor actually ran with Bash. Spacing, quoting style and line
+  continuations may differ; words and arguments may not. The comparison uses the Bash guards' shell
+  parser.
+- `Actual` must be an exact run of whole lines from that command's recorded output. Failed commands
+  count, and output saved to the session's `tool-results/` is read from the saved file.
+
+What the auditor can't fix is surfaced to the user instead of blocking:
+- a missing transcript path, or a transcript that can't be read;
+- a command the shell parser rejects;
+- `Actual` that fell in the part of a long failed command's output cut from the transcript;
+- a result still unwritten after re-reading every 5 s for 50 s (the hook's timeout is 60 s).
+
+The message includes the auditor's report and asks the user for the missing context. The hook proves a
+command ran and printed those lines, not that it tests the claim.
+
 `skill-arm` (UserPromptSubmit) arms a session marker when a prompt invokes `/review` or
-`/double-blind`, and `skill-check` (Stop) keeps the turn going until its closing block is complete.
-Each blocks once and names what is missing; if the retry is still incomplete, the turn or agent ends
-and the user is told what is missing.
+`/double-blind`. Background-task notifications, which also arrive as prompts and carry an agent's
+output, never arm it. `skill-check` (Stop) keeps the turn going until its closing block is complete.
+
+Each hook blocks once and names what is missing; if the retry is still incomplete, the turn or agent
+ends and the user is told what is missing.
 
 ## Informational hooks
 
@@ -391,7 +411,8 @@ scripts/
   house-rules.mjs      house rules injection
   deliverables.mjs     closing blocks for the skills and the auditor, and their checks
   skill-arm.mjs / skill-check.mjs  closing-block enforcement for /review and /double-blind
-  audit-check.mjs      the auditor's report check
+  audit-check.mjs      the auditor's report check, Reproducers verified against its transcript
+  agent-transcript.mjs reads a subagent transcript's Bash calls and results (a library, not a hook)
   guard.sh / hook-open.sh  fail-closed / fail-open wrappers
   cli/                 the sm CLI
 agents/
