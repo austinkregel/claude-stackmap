@@ -1,13 +1,9 @@
 #!/usr/bin/env node
 /**
  * SessionStart hook: state the repo's actual position before the agent assumes one.
- * The sharpest staleness failures — reviewing a cached stale branch, missing a rename, arguing
- * about PR state — all start from an unstated assumption about HEAD.
  *
- * Informational, so it fails OPEN, but it no longer hides what it could not do. It used to swallow
- * a failed `git fetch` and then report ahead/behind counts computed from stale remote refs under
- * the heading "verified, not assumed". A failed fetch is now stated in the context itself, and a
- * payload it cannot read is reported instead of silently falling back to process.cwd().
+ * Fails open, visibly. A failed fetch is stated in the context, and a payload with no cwd is
+ * reported rather than falling back to process.cwd().
  */
 import { execFileSync } from "node:child_process";
 import { addContext, readPayload, reportError } from "./hook-lib.mjs";
