@@ -1,10 +1,7 @@
 #!/usr/bin/env node
 /**
- * Regression suite for the destructive-command guard (guard.mjs) and the guard.sh wrapper,
- * including every fail-closed path.
- *
- * Runs against a temporary config ($STACKMAP_CONFIG) and state directory ($STACKMAP_STATE), so it
- * never reads or writes the real ones.
+ * Suite for the destructive-command guard (guard.mjs) and the guard.sh wrapper, including every
+ * fail-closed path. Uses a temporary $STACKMAP_CONFIG and $STACKMAP_STATE, never the real ones.
  */
 import { spawnSync, execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -27,8 +24,7 @@ function run(payload, { raw = false, script = "guard.mjs" } = {}) {
   return { code: r.status, out: r.stdout ?? "", err: r.stderr ?? "" };
 }
 
-// A block must be the rule firing, not a crash that happens to exit 2: rule blocks start with
-// "Blocked:", and every fail-closed check passes its own `reason`.
+// Every expected block must be the rule firing, not a crash: fail-closed checks pass their own `reason`.
 const RULE_BLOCK = /^Blocked:/m;
 
 function check(label, expected, payload, opts = {}) {
@@ -55,7 +51,7 @@ try {
   check("ordinary migrate", ALLOW, bash("php artisan migrate --step"));
   check("merge mentioned inside a string, not invoked", ALLOW, bash('echo "do not git merge here"'));
   check("rm -rf on scratch (deliberately not blocked)", ALLOW, bash("rm -rf storage/tmp-3-output"));
-  check("regression: a quoted ; no longer splits into a fake command", ALLOW, bash('echo "wip; git merge later"'));
+  check("a quoted ; does not split off a second command", ALLOW, bash('echo "wip; git merge later"'));
   check("reset without --hard", ALLOW, bash("git reset HEAD~1"));
   check("--hard mentioned in a commit message is not a reset", ALLOW, bash('git log --grep "--hard"'));
 
@@ -73,7 +69,7 @@ try {
   check("migrate:fresh (drops every table)", BLOCK, bash("php artisan migrate:fresh --seed"));
   check("db:wipe", BLOCK, bash("php artisan db:wipe"));
   check("DROP TABLE in a quoted -e", BLOCK, bash("mysql -e 'DROP TABLE clients'"));
-  check("regression: DROP TABLE in a heredoc fed to a client", BLOCK, bash("mysql app <<'SQL'\nDROP TABLE clients;\nSQL"));
+  check("DROP TABLE in a heredoc fed to a client", BLOCK, bash("mysql app <<'SQL'\nDROP TABLE clients;\nSQL"));
 
   console.log("\n-- branch-aware rules --");
   const repo = join(sandbox, "repo");
@@ -84,14 +80,14 @@ try {
   check("implicit push while on develop", BLOCK, bash("git push", repo));
   check("push -u origin (one positional) while on develop is implicit", BLOCK, bash("git push -u origin", repo));
   check("git -C <repo> commit uses that repo's branch", BLOCK, bash(`git -C ${repo} commit -m wip`, sandbox));
-  check("regression: git -C \"$DIR\" status does not need the directory, so it passes", ALLOW, bash('git -C "$DIR" status'));
+  check("git -C \"$DIR\" status does not need the directory, so it passes", ALLOW, bash('git -C "$DIR" status'));
   check("git -C \"$DIR\" commit needs the branch, so it fails closed", BLOCK, bash('git -C "$DIR" commit -m wip'), { reason: /branch is unknown/ });
   execFileSync("git", ["-C", repo, "checkout", "-q", "-b", "feature/x"]);
   check("commit on a feature branch", ALLOW, bash("git commit -m wip", repo));
   check("implicit push on a feature branch", ALLOW, bash("git push", repo));
 
   console.log("\n-- commit messages must not contain commands --");
-  check("the reported case: a command inside -m", BLOCK, bash('git commit -m "wip; git merge later"', repo), { reason: /contains the command 'git merge'/ });
+  check("a command inside -m", BLOCK, bash('git commit -m "wip; git merge later"', repo), { reason: /contains the command 'git merge'/ });
   check("prose instead of the command passes", ALLOW, bash('git commit -m "wip; merge later"', repo));
   check("'git is implied' is prose, not a subcommand", ALLOW, bash('git commit -m "Merge later; git is implied"', repo));
   check("a word that merely starts like a subcommand", ALLOW, bash('git commit -m "Fix git mergeable check"', repo));
@@ -137,7 +133,7 @@ try {
   writeFileSync(configPath, "{not json");
   check("invalid JSON config blocks instead of silently using defaults", BLOCK, bash("ls"), { reason: /not valid JSON/ });
   setConfig({ guard: { alowMerge: true } });
-  check("regression: a misspelled config key blocks instead of doing nothing", BLOCK, bash("ls"), { reason: /unknown key/ });
+  check("a misspelled config key blocks instead of doing nothing", BLOCK, bash("ls"), { reason: /unknown key/ });
   setConfig({});
 
   console.log("\n-- the wrapper must fail CLOSED --");
