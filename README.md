@@ -1,12 +1,13 @@
 # stackmap
 
-A Claude Code plugin in four parts.
+A Claude Code plugin in five parts.
 
 | Component | What it does |
 |---|---|
 | `stackmap_*` MCP tools | Deterministic code-structure lookups — resolve an interface to its implementation and file without reading service providers |
 | `note_*` MCP tools + `recall` skill | A durable cross-session note store with provenance stamping |
-| Hooks | Guards against destructive commands, truncated command output, and check-silencing edits; configurable house rules injected into every session and sub-agent; repo-freshness context, fetch sanity, and review enforcement |
+| `adversarial-auditor` agent + `review` and `double-blind` skills | Differentiated review and verification, with an agent that tries to falsify a claim against ground truth |
+| Hooks | Guards against destructive commands, truncated command output, and check-silencing edits; configurable house rules injected into every session and sub-agent; repo-freshness context, fetch sanity, and closing-block checks for the skills and the auditor |
 | `sm` CLI | Reusable data commands (`jsonl`, `csv`, `slice`, `wait`, `dupes`) that report their own counts instead of dropping rows quietly |
 
 `npm test` runs every suite. `npm run bench` measures note retrieval latency and rank quality.
@@ -277,14 +278,36 @@ If a configured file is missing, unreadable, or empty, a `disable` id is unknown
 exceeds Claude Code's 10,000-character limit for hook output, **nothing** is injected and the user
 is shown why.
 
+## Review, double-blind, and the auditor
+
+- **`stackmap:adversarial-auditor`** tries to falsify one claim against the real code, commands,
+  and tests. It runs in its own worktree (which Claude Code starts at the remote's default branch)
+  and checks out the ref the brief names, or `main`. Its report ends with `Claim`, `Audited at: <ref>@<sha>`, `Verdict`
+  (FALSIFIED, SURVIVED, or UNTESTED), `Tested`, `Grade`, `Unchecked`, and, for UNTESTED, `Needs`.
+  FALSIFIED and SURVIVED must be graded PROVEN.
+- **`/review`** reviews along independent axes and sends its highest-severity and reasoning-only
+  findings to the auditor. Its closing block adds an `Audited:` count.
+- **`/double-blind`** has 2–3 agents answer one falsifiable claim by different methods, blind to
+  each other, then always audits the leading answer. It closes with the claim, the base, each
+  method's grade, the audit verdict, and what remains unverified.
+
+Both skills ask which ref to use when none is named and the current branch isn't `main`.
+
+`audit-check` (SubagentStop, auditor only) keeps the auditor running until its report is complete.
+`skill-arm` (UserPromptSubmit) arms a session marker when a prompt invokes `/review` or
+`/double-blind`, and `skill-check` (Stop) keeps the turn going until its closing block is complete.
+Each blocks once and names what is missing; if the retry is still incomplete, the turn or agent ends
+and the user is told what is missing.
+
 ## Informational hooks
 
-`freshness` (SessionStart), `house-rules`, `fetch-sanity` (PostToolUse), and `review-arm` /
-`review-check` (UserPromptSubmit / Stop) run through `scripts/hook-open.sh <script.mjs>` and fail
-open: a failure exits 1 with a `systemMessage` for the user and never blocks a session, prompt,
-tool result, or turn. A `git fetch` that fails at session start is stated in the freshness context.
+`freshness` (SessionStart), `house-rules`, `fetch-sanity` (PostToolUse), `skill-arm` /
+`skill-check` (UserPromptSubmit / Stop), and `audit-check` (SubagentStop) run through
+`scripts/hook-open.sh <script.mjs>` and fail open: a failure exits 1 with a `systemMessage` for the
+user and never blocks a session, prompt, tool result, or turn. A `git fetch` that fails at session
+start is stated in the freshness context.
 
-Per-session state (review markers) lives in `~/.stackmap/sessions`, or under `$STACKMAP_STATE`
+Per-session state (skill markers) lives in `~/.stackmap/sessions`, or under `$STACKMAP_STATE`
 when set (it must be absolute).
 
 ## Limits
@@ -327,7 +350,8 @@ npm run truncate-test      # no-truncate
 npm run suppress-test      # no-suppress and the suppression catalog
 npm run house-rules-test   # house rules: extend/replace/disable, and every failure path
 npm run hooks-test         # hook-open.sh, freshness, fetch sanity, config.example.json
-npm run review-test        # review arm/check
+npm run skill-check-test   # closing blocks for /review and /double-blind
+npm run audit-test         # the auditor's report check
 npm run extract-test       # PHP extractors + adapter wiring, on inline fixtures
 npm run notes-test         # note store
 npm run smoke              # end-to-end test over stdio, including failure paths
@@ -363,8 +387,15 @@ scripts/
   no-suppress.mjs      check-silencing edits
   suppression-rules.mjs  the suppression catalog
   house-rules.mjs      house rules injection
+  deliverables.mjs     closing blocks for the skills and the auditor, and their checks
+  skill-arm.mjs / skill-check.mjs  closing-block enforcement for /review and /double-blind
+  audit-check.mjs      the auditor's report check
   guard.sh / hook-open.sh  fail-closed / fail-open wrappers
   cli/                 the sm CLI
+agents/
+  adversarial-auditor.md
+skills/
+  recall/, review/, double-blind/
 house-rules/
   default.md           the shipped default ruleset
 ```
