@@ -1,6 +1,5 @@
 #!/bin/sh
-# Launch the stackmap MCP server. Fails loudly — a silent exit would look to Claude Code
-# like a server that started and returned nothing.
+# Launch the stackmap MCP server. Every failure exits with a message on stderr, never silently.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 . "$ROOT/scripts/find-node.sh"
