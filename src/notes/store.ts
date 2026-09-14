@@ -1,16 +1,23 @@
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync, watch, type FSWatcher } from "node:fs";
-import { join, isAbsolute, relative } from "node:path";
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync, realpathSync, watch, type FSWatcher } from "node:fs";
+import { join, isAbsolute, relative, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { expandPath } from "../config.js";
+import type { IndexRoot } from "../adapters/types.js";
 
 export type NoteStatus = "current" | "superseded" | "retracted";
 
 export interface FileStamp {
+  /** Relative to the root named by `root` (the project's main root when absent), or absolute. */
   path: string;
+  /** The alias, as written in the config, whose root `path` is relative to. Absent: the main root. */
+  root?: string;
   sha256: string;
   /** ISO timestamp when the stamp was taken. */
   at: string;
 }
+
+/** A project's roots for resolving stamps, or why there are none. */
+export type RootsLookup = { roots: IndexRoot[]; reason?: undefined } | { roots: null; reason: string };
 
 export interface Note {
   id: string;
@@ -30,7 +37,10 @@ export interface Note {
 /** Drift between what a note was written about and what those files contain now. */
 export interface Drift {
   path: string;
-  state: "unchanged" | "changed" | "missing";
+  root?: string;
+  /** `unresolved`: the stamp's project or alias can't be located now, so the file couldn't be checked. */
+  state: "unchanged" | "changed" | "missing" | "unresolved";
+  reason?: string;
 }
 
 const ESC = (s: string) => s.replace(/"/g, '\\"');
@@ -48,7 +58,7 @@ function serialize(n: Note): string {
     `supersedes: [${n.supersedes.map((t) => `"${ESC(t)}"`).join(", ")}]`,
     `superseded_by: [${n.supersededBy.map((t) => `"${ESC(t)}"`).join(", ")}]`,
     "files:",
-    ...n.files.map((f) => `  - path: "${ESC(f.path)}"\n    sha256: "${f.sha256}"\n    at: "${f.at}"`),
+    ...n.files.map((f) => `  - path: "${ESC(f.path)}"\n${f.root ? `    root: "${ESC(f.root)}"\n` : ""}    sha256: "${f.sha256}"\n    at: "${f.at}"`),
     "---",
   ].join("\n");
   return `${fm}\n\n${n.body.trim()}\n`;
@@ -79,7 +89,7 @@ function deserialize(raw: string, fallbackId: string): Note | null {
     if (inFiles) {
       const item = /^\s*-\s*path:\s*(.+)$/.exec(line);
       if (item) { if (cur?.path && cur.sha256) files.push(cur as FileStamp); cur = { path: unquote(item[1]!) }; continue; }
-      const kv = /^\s+(sha256|at):\s*(.+)$/.exec(line);
+      const kv = /^\s+(root|sha256|at):\s*(.+)$/.exec(line);
       if (kv && cur) { (cur as any)[kv[1]!] = unquote(kv[2]!); continue; }
       if (/^\S/.test(line)) inFiles = false; else continue;
     }
@@ -193,26 +203,57 @@ export class NoteStore {
     return deserialize(readFileSync(p, "utf8"), id);
   }
 
-  /** Stamp each referenced file with its current content hash, relative to repoRoot when given. */
-  stamp(paths: string[], repoRoot: string | null): FileStamp[] {
+  /**
+   * Stamp each referenced file with its current content hash, against the project's roots.
+   *   - A relative path is stamped in the one root that has it; in several roots it is ambiguous (an
+   *     error); in none it is stamped against the main root as missing.
+   *   - An absolute path inside a root is stored relative to the innermost such root; outside every
+   *     root it stays absolute.
+   * A relative path with no project to resolve it against is an error.
+   */
+  stamp(paths: string[], lookup: RootsLookup): FileStamp[] {
     const at = new Date().toISOString();
     const out: FileStamp[] = [];
+    const rootField = (r: IndexRoot) => (r.kind === "alias" ? { root: r.configured } : {});
     for (const p of paths) {
-      const abs = isAbsolute(p) ? p : repoRoot ? join(repoRoot, p) : p;
-      const sha = hashFile(abs);
-      if (sha) out.push({ path: repoRoot && isAbsolute(p) ? relative(repoRoot, p) : p, sha256: sha, at });
+      if (isAbsolute(p)) {
+        const real = existsSync(p) ? realpathSync(p) : p;
+        const owner = (lookup.roots ?? [])
+          .filter((r) => real === r.path || real.startsWith(r.path + sep))
+          .sort((a, b) => b.path.length - a.path.length)[0];
+        const sha = hashFile(p) ?? "missing";
+        out.push(owner ? { path: relative(owner.path, real).split(sep).join("/"), ...rootField(owner), sha256: sha, at } : { path: p, sha256: sha, at });
+        continue;
+      }
+      if (!lookup.roots) throw new Error(`note_write: can't stamp "${p}" — ${lookup.reason}. Pass an absolute path, or a "repo" naming a configured project.`);
+      const holders = lookup.roots.filter((r) => existsSync(join(r.path, p)));
+      if (holders.length > 1) {
+        throw new Error(`note_write: "${p}" exists in more than one root of this project (${holders.map((r) => r.path).join(", ")}); pass an absolute path to say which.`);
+      }
+      const holder = holders[0];
+      if (holder) out.push({ path: p, ...rootField(holder), sha256: hashFile(join(holder.path, p)) ?? "missing", at });
       else out.push({ path: p, sha256: "missing", at });
     }
     return out;
   }
 
-  /** Compare a note's stamps against the files as they are now. */
-  drift(note: Note, repoRoot: string | null): Drift[] {
+  /** Compare a note's stamps against the files as they are now, resolved against its own project's roots. */
+  drift(note: Note, lookup: RootsLookup): Drift[] {
     return note.files.map((f) => {
-      const abs = isAbsolute(f.path) ? f.path : repoRoot ? join(repoRoot, f.path) : f.path;
-      if (!existsSync(abs)) return { path: f.path, state: "missing" as const };
+      const label = { path: f.path, ...(f.root ? { root: f.root } : {}) };
+      let abs: string;
+      if (isAbsolute(f.path)) {
+        abs = f.path;
+      } else if (!lookup.roots) {
+        return { ...label, state: "unresolved" as const, reason: lookup.reason };
+      } else {
+        const root = f.root === undefined ? lookup.roots.find((r) => r.kind === "root") : lookup.roots.find((r) => r.kind === "alias" && r.configured === f.root);
+        if (!root) return { ...label, state: "unresolved" as const, reason: `alias "${f.root}" is no longer configured for project "${note.repo ?? "(default)"}"` };
+        abs = join(root.path, f.path);
+      }
+      if (!existsSync(abs)) return { ...label, state: "missing" as const };
       const now = hashFile(abs);
-      return { path: f.path, state: now === f.sha256 ? ("unchanged" as const) : ("changed" as const) };
+      return { ...label, state: now === f.sha256 ? ("unchanged" as const) : ("changed" as const) };
     });
   }
 
