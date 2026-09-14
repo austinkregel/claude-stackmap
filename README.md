@@ -5,7 +5,7 @@ A Claude Code plugin in five parts.
 | Component | What it does |
 |---|---|
 | `stackmap_*` MCP tools | Deterministic code-structure lookups — resolve an interface to its implementation and file without reading service providers |
-| `note_*` MCP tools + `recall` skill | A durable cross-session note store with provenance stamping |
+| `note_*` MCP tools + `recall` skill | A durable cross-session note store with provenance stamping, and typed records you can query |
 | `adversarial-auditor` agent + `review` and `double-blind` skills | Differentiated review and verification, with an agent that tries to falsify a claim against ground truth |
 | Hooks | Guards against destructive commands, truncated command output, and check-silencing edits; configurable house rules injected into every session and sub-agent; repo-freshness context, fetch sanity, and closing-block checks for the skills and the auditor |
 | `sm` CLI | Reusable data commands (`jsonl`, `csv`, `slice`, `wait`, `dupes`) that report their own counts instead of dropping rows quietly |
@@ -193,6 +193,76 @@ Edge flags:
   holds the source text, not a name you can look up.
 - `inferredFrom` — the edge was derived, not written literally at the call site. Currently only
   from expanding a `foreach` over a class-const array declared in the same file.
+
+## Notes
+
+Notes are conclusions that outlive a session. Each one is a markdown file in `notesDir`; a typed note
+also has a data file beside it. Every note tool reports files in `notesDir` that can't be read as
+notes under `malformedFiles`, rather than skipping them.
+
+### `note_write`
+`{ title, body, files?, tags?, repo?, status?, supersedes?, id?, verified_on?, schema?, data? }`
+- `files` are content-hashed when the note is written, so a later read can report drift.
+- `supersedes` ids must exist; they are demoted and back-linked.
+- `id` defaults to a slug of the title. Passing an existing id updates that note. An id containing
+  `/`, `\`, or `..` is an error.
+- `verified_on` is an ISO 8601 date or date-time; default now.
+- `schema` + `data` make a **typed note**. `data` is validated against the shipped schema and stored as
+  `<id>.json`. `schema` and `data` go together.
+  - Updating a typed note without them keeps its record.
+  - An untyped note can become typed.
+  - A typed note can't change schema: write a new note and supersede the old one.
+
+### `note_search`
+`{ query, repo?, include_retracted?, limit? }` → notes ranked by BM25, weighted by status and drift,
+with `caveat`, `drift`, and `schema`. Typed notes are searchable by every key and value in their data:
+numbers, hex values, and short tokens like `u32` are kept whole, and dotted or dashed values also match
+by their parts (`CRC-32` → `crc`, `32`).
+
+### `note_get`, `note_supersede`
+`note_get { id }` returns the note, its drift, and for a typed note its record and `validation`.
+`note_supersede { old_id, new_id }` links two existing notes; nothing is changed if either is missing.
+
+### `note_schemas`
+Lists the shipped schemas with their version, description, and JSON Schema:
+
+| Schema | Shape |
+|---|---|
+| `struct_field_list@1` | `{ name, size, align (null when unknown), fields: [{ name, offset, size, type, bit_offset?, bit_size?, layout? }] }`, with offsets and sizes in bytes |
+| `offset_table@1` | `{ subject, base, entries: [{ name, offset (hex string like "0x1A0"), size? }] }` |
+| `algorithm_params@1` | `{ algorithm, variant, site, params: [{ name, value (string, number, boolean, or null) }] }` |
+
+A schema's shape changes only with a new version. A record written under another version, or one that
+no longer validates, is reported rather than read as current.
+
+### `note_query`
+`{ schema, filter?, repo?, include_retracted?, limit?, offset? }` → the typed records of one schema
+that match `filter`, data exactly as stored, sorted by id. Default limit 100. Retracted records are
+left out unless asked for and counted in `excludedRetracted`. Records that don't validate are listed in
+`invalid` with the reason and issues.
+
+```json
+{ "operator": "and", "conditions": [
+  { "parameter": "fields[].type", "comparator": "STARTS_WITH", "value": "uint" },
+  { "operator": "or", "conditions": [
+    { "parameter": "size", "comparator": "GREATER_THAN", "value": 8 },
+    { "parameter": "fields[].bit_size", "comparator": "EXISTS" }
+  ] }
+] }
+```
+
+- **Groups** are `{ operator: "and" | "or", conditions: [...] }` and nest. Empty `conditions` matches
+  everything.
+- **Parameters** are field names joined by `.`. `name[]` means any element of the list `name`. A
+  parameter the schema doesn't have is an error that lists the valid fields.
+- **Comparators:** `EQUAL` `NOT_EQUAL`, `LIKE` `NOTLIKE` (substring), `IN` `NOTIN` (a list),
+  `STARTS_WITH` `NOT_STARTS_WITH`, `ENDS_WITH` `NOT_ENDS_WITH`, `REGEX` `NOT_REGEX`, `EXISTS`
+  `MISSING` (no value), `LESS_THAN` `LESS_THAN_EQUAL` `GREATER_THAN` `GREATER_THAN_EQUAL`.
+- **Through `[]`,** a condition holds when any element matches. The negated forms (`NOT_*`, `NOTLIKE`,
+  `NOTIN`, `MISSING`) hold when no element matches.
+- **Case:** string comparisons and regexes are case-insensitive. Ranges compare numbers numerically
+  and strings as text, case-sensitively. A number never compares with a string.
+- **Presence:** `EXISTS` means the key is present, even with a `null` value.
 
 ## Guards
 
@@ -407,6 +477,8 @@ when set (it must be absolute).
   `globalExclude` or an adapter default exclude is not scanned, and a warning says so. The same
   contradiction within one entry's own lists is a config error. Include directories that don't
   exist, and ones that can't be read, are listed as warnings too.
+- **Hex strings range as text.** `note_query` compares `"0x9"` above `"0x10"` and `"0xA"` below
+  `"0xa"`. Zero-pad hex values to one width and one case if you'll filter them by range.
 - **Guards see the command, not what it runs.** `eval` strings, aliases, shell functions, scripts
   on disk, and zsh-only syntax (glob qualifiers) are not followed. A program name or push refspec
   built at runtime is not checked.
@@ -432,7 +504,7 @@ npm run audit-test         # the auditor's report check
 npm run cli-test           # every sm subcommand: output, counts, --json, exit codes
 npm run config-test        # config resolution, per-entry validation, scope, detection, roots, caching, add-index
 npm run extract-test       # PHP extractors + adapter wiring, including several roots, on inline fixtures
-npm run notes-test         # note store, stamps across a project's roots
+npm run notes-test         # note store and file format, stamps across roots, typed notes, note_query, the data tokenizer
 npm run smoke              # every MCP tool over stdio on Laravel fixtures, including scope, aliases, and failure paths
 ```
 
@@ -445,9 +517,13 @@ Every suite uses temporary config, state, and fixtures, so none needs or reads y
 src/
   config.ts            config schema (per-entry validation), resolution, project and scope selection, adding a project
   index.ts             MCP server — tool definitions, argument checks, and dispatch
-  notes/store.ts       note serialization, file stamping, drift, caching
-  notes/search.ts      BM25 over an inverted index
+  args.ts              numeric tool arguments
+  notes/store.ts       note files and typed data files, file stamping, drift, caching
+  notes/search.ts      BM25 over an inverted index, and the data tokenizer
+  notes/schemas.ts     the shipped typed-note schemas and record validation
+  notes/query.ts       note_query filters: parsing against a schema, and matching
   notes/tools.ts       note_* tool handlers
+  types/layout.ts      the type layout shape struct_field_list stores
   php/psr4.ts          composer.json PSR-4 -> symbol/file mapping, both directions
   php/uses.ts          namespace + use-statement parsing, short-name expansion
   php/bindings.ts      container + contextual binding extraction
