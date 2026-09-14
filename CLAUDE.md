@@ -287,7 +287,11 @@ that isn't on disk yields `exists: false` with the candidate path.
 
 `src/notes/store.ts` writes notes in frontmatter format 2 (a `format: 2` line, every value JSON);
 change `serialize` and `parseFormat2` in lockstep. `parseLegacy` only reads the older format; a note
-is rewritten as format 2 on its next write. `note_write` content-hashes every file the note is about;
+is rewritten as format 2 on its next write.
+- Both parsers are strict: an unknown key, a key given twice, or a line that isn't a key is an error.
+- `parseLegacy` requires exactly what every older writer emitted: all nine keys, a bare-word status,
+  quoted strings, `[..]` lists of quoted strings, and path, sha256, and at on every stamp. Never add
+  a default for something missing. `note_write` content-hashes every file the note is about;
 `drift()` re-hashes at read time.
 
 A file that can't be read as a note is never skipped: `scan()` lists it in `malformed()`, every note
