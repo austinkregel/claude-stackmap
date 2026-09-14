@@ -387,6 +387,16 @@ try {
   }
   t = throws(() => noteGet(store, { id: "../escape" }, rootsFor), /is not allowed/);
   check("note_get refuses an id that leaves the notes directory", t.ok, t.detail);
+  for (const [label, files, pattern] of [
+    ["a string instead of a list", "service.php", /'files' must be a list of paths, got "service\.php"/],
+    ["a number in the list", ["service.php", 7], /files\[1\] = 7/],
+    ["an empty path", [""], /files\[0\] = ""/],
+    ["an object in the list", [{ path: "a.php" }], /files\[0\] = \{"path":"a\.php"\}/],
+  ]) {
+    t = throws(() => noteWrite(store, { title: "bad files", body: "y", files, repo: "fuel" }, stampFor("fuel")), pattern);
+    check(`note_write rejects 'files' with ${label}`, t.ok, t.detail);
+  }
+  check("…and writes nothing", !existsSync(join(dir, "notes", "bad-files.md")));
   for (const bad of ["yesterday", "2026-13-45", 20260914]) {
     t = throws(() => noteWrite(store, { title: "dated", body: "y", verified_on: bad }, stampFor("fuel")), /'verified_on' must be an ISO 8601 date or date-time/);
     check(`verified_on ${JSON.stringify(bad)} is an error`, t.ok, t.detail);
@@ -407,7 +417,29 @@ try {
   const notesDir = join(dir, "notes");
   writeFileSync(join(notesDir, "no-frontmatter.md"), "just text\n");
   writeFileSync(join(notesDir, "bad-status.md"), `---\nformat: 2\nid: "bad-status"\ntitle: "t"\nstatus: "maybe"\ncreated: "2026-01-01"\nverified_on: null\nrepo: null\ntags: []\nsupersedes: []\nsuperseded_by: []\nfiles:\n---\n\nbody\n`);
-  writeFileSync(join(notesDir, "legacy-bad-status.md"), `---\nid: "legacy-bad-status"\ntitle: "t"\nstatus: maybe\n---\n\nbody\n`);
+  const legacyNote = (fields) => {
+    const lines = { id: '"old"', title: '"Old note"', status: "current", created: '"2026-01-01T00:00:00Z"', verified_on: "null", repo: "null", tags: "[]", supersedes: "[]", superseded_by: "[]", ...fields };
+    const files = lines.files ?? "";
+    delete lines.files;
+    return `---\n${Object.entries(lines).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}: ${v}`).join("\n")}\nfiles:\n${files}---\n\nbody\n`;
+  };
+  writeFileSync(join(notesDir, "legacy-bad-status.md"), legacyNote({ status: "maybe" }));
+  const legacyRejects = {
+    "legacy-no-status.md": [{ status: undefined }, /frontmatter has no "status"/],
+    "legacy-no-title.md": [{ title: undefined }, /frontmatter has no "title"/],
+    "legacy-no-created.md": [{ created: undefined }, /frontmatter has no "created"/],
+    "legacy-no-id.md": [{ id: undefined }, /frontmatter has no "id"/],
+    "legacy-unquoted-title.md": [{ title: "Old note" }, /"title": expected a double-quoted string/],
+    "legacy-bad-list.md": [{ tags: '"a", "b"' }, /"tags" must be a \[\.\.\] list/],
+    "legacy-list-no-comma.md": [{ tags: '["a" "b"]' }, /"tags" needs a comma between items/],
+    "legacy-stamp-no-sha.md": [{ files: '  - path: "a.php"\n    at: "2026-01-01T00:00:00Z"\n' }, /files\[0\] has no "sha256"/],
+    "legacy-unknown-key.md": [{ owner: '"me"' }, /unknown frontmatter key "owner"/],
+  };
+  for (const [name, [fields]] of Object.entries(legacyRejects)) writeFileSync(join(notesDir, name), legacyNote(fields));
+  writeFileSync(join(notesDir, "legacy-quoted.md"), legacyNote({ id: '"legacy-quoted"', title: '"He said \\"hi\\", twice"', tags: '["a,b", "c\\"d", ""]', files: '  - path: "x, y.php"\n    root: "~/pkg"\n    sha256: "missing"\n    at: "2026-01-01T00:00:00Z"\n' }));
+  writeFileSync(join(notesDir, "garbage-line.md"), `---\nformat: 2\nid: "garbage-line"\ntitle: "t"\nstatus: "current"\ncreated: "2026-01-01"\nverified_on: null\nrepo: null\ntags: []\nsupersedes: []\nsuperseded_by: []\nthis is not a key\nfiles:\n---\n\nbody\n`);
+  writeFileSync(join(notesDir, "twice.md"), `---\nformat: 2\nid: "twice"\ntitle: "t"\ntitle: "u"\nstatus: "current"\ncreated: "2026-01-01"\nverified_on: null\nrepo: null\ntags: []\nsupersedes: []\nsuperseded_by: []\nfiles:\n---\n\nbody\n`);
+  writeFileSync(join(notesDir, "half-typed.md"), `---\nformat: 2\nid: "half-typed"\ntitle: "t"\nstatus: "current"\ncreated: "2026-01-01"\nverified_on: null\nrepo: null\ntags: []\nsupersedes: []\nsuperseded_by: []\nschema: "offset_table"\nfiles:\n---\n\nbody\n`);
   writeFileSync(join(notesDir, "bad-json.md"), `---\nformat: 2\nid: bad-json\ntitle: "t"\nstatus: "current"\ncreated: "2026-01-01"\nverified_on: null\nrepo: null\ntags: []\nsupersedes: []\nsuperseded_by: []\nfiles:\n---\n\nbody\n`);
   writeFileSync(join(notesDir, "orphan.json"), "{}\n");
   writeFileSync(join(notesDir, "dated.json"), "{}\n");
@@ -417,12 +449,22 @@ try {
   check("a note with no frontmatter is reported, not skipped", /no frontmatter block/.test(reason("no-frontmatter.md")), JSON.stringify(malformed));
   check("an unknown status is reported", /unknown status "maybe"/.test(reason("bad-status.md")), JSON.stringify(malformed));
   check("…in the older format too", /unknown status "maybe"/.test(reason("legacy-bad-status.md")), JSON.stringify(malformed));
+  for (const [name, [, pattern]] of Object.entries(legacyRejects)) {
+    check(`an older-format note is reported, never defaulted: ${name}`, pattern.test(reason(name)), reason(name) || JSON.stringify(malformed));
+  }
+  const quoted = store.get("legacy-quoted");
+  check("an older-format note reads quoted commas, escaped quotes, and empty items exactly",
+    quoted.title === 'He said "hi", twice' && JSON.stringify(quoted.tags) === JSON.stringify(["a,b", 'c"d', ""]) && quoted.files[0].path === "x, y.php" && quoted.files[0].root === "~/pkg",
+    JSON.stringify(quoted));
+  check("a frontmatter line that isn't a key is reported", /unrecognized frontmatter line: this is not a key/.test(reason("garbage-line.md")), JSON.stringify(malformed));
+  check("a frontmatter key given twice is reported", /frontmatter has "title" twice/.test(reason("twice.md")), JSON.stringify(malformed));
+  check("a note with only some of the typed keys is reported", /needs schema, schema_version, and data_sha256 together; it has only schema/.test(reason("half-typed.md")), JSON.stringify(malformed));
   check("a frontmatter value that isn't JSON is reported, naming the key", /"id" is not valid JSON/.test(reason("bad-json.md")), JSON.stringify(malformed));
   check("a data file with no note is reported", /a data file with no note orphan\.md/.test(reason("orphan.json")), JSON.stringify(malformed));
   check("a data file beside an untyped note is reported", /beside an untyped note dated\.md/.test(reason("dated.json")), JSON.stringify(malformed));
   t = throws(() => noteGet(store, { id: "bad-status" }, rootsFor), /unknown status "maybe"/);
   check("note_get on a malformed note is an error, not 'not found'", t.ok, t.detail);
-  for (const f of ["no-frontmatter.md", "bad-status.md", "legacy-bad-status.md", "bad-json.md", "orphan.json", "dated.json"]) rmSync(join(notesDir, f));
+  for (const f of ["no-frontmatter.md", "bad-status.md", "legacy-bad-status.md", "bad-json.md", "orphan.json", "dated.json", ...Object.keys(legacyRejects), "legacy-quoted.md", "garbage-line.md", "twice.md", "half-typed.md"]) rmSync(join(notesDir, f));
   rescan(store);
   check("removing them clears the report", noteSearch(store, { query: "anything" }, rootsFor).malformedFiles.length === 0, JSON.stringify(store.malformed()));
   store.close();
