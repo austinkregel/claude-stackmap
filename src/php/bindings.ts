@@ -41,11 +41,7 @@ export interface ContextualBinding {
   line: number;
 }
 
-/**
- * A call whose method name looks like a binding but whose receiver is not the container.
- * Reported rather than dropped: `Route::bind()` produced three false container bindings
- * before the receiver check existed, and a silent skip is how that stayed invisible.
- */
+/** A call whose method name looks like a binding but whose receiver is not the container. Reported, never dropped. */
 export interface SkippedCall {
   receiver: string;
   method: string;
@@ -62,11 +58,7 @@ export interface ExtractResult {
 const BIND_RE = /(?<![A-Za-z0-9_$])(bind|bindIf|singleton|singletonIf|scoped|scopedIf|instance)\s*\(/g;
 const WHEN_RE = /(?<![A-Za-z0-9_$])when\s*\(/g;
 
-/**
- * Receiver forms that are the service container. A whitelist, not a blacklist: `Route::bind()`,
- * `$router->bind()`, and a `public function bind()` declaration all reach the same method names,
- * and only the container's bindings belong in the resolution table.
- */
+/** Receiver forms that are the service container. A whitelist: the receiver, not the method name, decides a container call. */
 const CONTAINER_RECEIVER_RE =
   /(?:^|[^A-Za-z0-9_$\\])((?:\$this->app|\$this->container|\$app|\$container|app\(\)|App|Container::getInstance\(\))\s*(?:->|::)\s*)$/;
 /** Any receiver at all, used to tell "not the container" from "not a method call". */
@@ -254,8 +246,7 @@ export function extractBindings(source: string, relFile: string): ExtractResult 
     const line = lineAt(m.index!);
     const receiver = receiverAt(source, m.index!);
     if (!receiver.container) {
-      // A real method call on something else (Route::bind, $router->bind) is worth reporting.
-      // No receiver at all means a declaration or a plain function — not a binding either way.
+      // Another receiver is reported as skipped; no receiver means a declaration or bare call.
       if (receiver.text) skipped.push({ receiver: receiver.text, method, file: relFile, line });
       continue;
     }
@@ -287,8 +278,7 @@ export function extractBindings(source: string, relFile: string): ExtractResult 
       continue;
     }
 
-    // The abstract is computed. Emitting nothing here is the worst available outcome: an empty
-    // `implementedBy` then reads as "nothing binds this" when the site may bind many abstracts.
+    // The abstract is computed: report the site, never drop it.
     const expanded = expandLoopSite(source, table, parts, m.index!, method, relFile, line);
     if (expanded.length > 0) { bindings.push(...expanded); continue; }
     bindings.push({
@@ -350,10 +340,7 @@ export function extractBindings(source: string, relFile: string): ExtractResult 
 /**
  * Recover the concretes bound by a `foreach` over a class-const array, e.g.
  * `foreach (static::FILTERS as $key => $class) { $this->app->singleton(f($key), $class); }`.
- *
- * The const is a literal declared in the same file, so this is static evaluation, not
- * interpretation — but the edges are derived rather than written, so each carries
- * `inferredFrom` and the loop key is substituted into the abstract expression.
+ * Only a literal const declared in the same file is expanded; each derived edge carries `inferredFrom`.
  */
 function expandLoopSite(
   source: string,
