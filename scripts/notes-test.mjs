@@ -39,7 +39,6 @@ const aliasRoot = (configured, path) => ({ kind: "alias", configured, path, incl
 /** Projects the way the server resolves them: by the note's own repo name. */
 let projects = { fuel: [mainRoot(repo), aliasRoot("~/pkg", pkg)], other: [mainRoot(other)] };
 const rootsFor = (name) => (projects[name] ? { roots: projects[name] } : { roots: null, reason: `no enabled index named "${name}"` });
-const stampFor = (name) => rootsFor(name);
 /**
  * After writing note files behind a store's back: mark its listing stale, as its watcher would. The
  * watcher's events can't be delivered while this synchronous code runs, and the listing's 2s backstop
@@ -75,7 +74,7 @@ async function typedNotes() {
   let t;
 
   console.log("\n-- typed notes: storage --");
-  const w = noteWrite(store, { id: "header", title: "Header layout", body: "The save header.", schema: "struct_field_list", data: LAYOUT }, noProject());
+  const w = noteWrite(store, { id: "header", title: "Header layout", body: "The save header.", schema: "struct_field_list", data: LAYOUT }, noProject);
   check("a typed write names its data file, schema, and version", w.dataPath === join(typedDir, "header.json") && w.schema === "struct_field_list" && w.schemaVersion === 1, JSON.stringify(w));
   const dataBytes = readFileSync(join(typedDir, "header.json"));
   const onDisk = JSON.parse(dataBytes.toString("utf8"));
@@ -105,29 +104,29 @@ async function typedNotes() {
   writeFileSync(join(typedDir, "header.json"), dataBytes);
 
   console.log("\n-- typed notes: writes --");
-  noteWrite(store, { id: "header", title: "Header layout", body: "Updated prose only." }, noProject());
+  noteWrite(store, { id: "header", title: "Header layout", body: "Updated prose only." }, noProject);
   check("updating a typed note without schema/data keeps its record", JSON.stringify(store.get("header").record?.data) === JSON.stringify(LAYOUT) && store.get("header").body === "Updated prose only.");
   const before = readFileSync(join(typedDir, "header.json"), "utf8");
-  t = throws(() => noteWrite(store, { id: "header", title: "Header layout", body: "x", schema: "offset_table", data: OFFSETS }, noProject()), /is a struct_field_list record; changing it to offset_table is not allowed/);
+  t = throws(() => noteWrite(store, { id: "header", title: "Header layout", body: "x", schema: "offset_table", data: OFFSETS }, noProject), /is a struct_field_list record; changing it to offset_table is not allowed/);
   check("writing an existing typed id under another schema is an error", t.ok, t.detail);
   check("…and leaves the data file untouched", readFileSync(join(typedDir, "header.json"), "utf8") === before);
-  noteWrite(store, { id: "prose", title: "Prose first", body: "Untyped." }, noProject());
-  noteWrite(store, { id: "prose", title: "Prose first", body: "Now typed.", schema: "offset_table", data: OFFSETS }, noProject());
+  noteWrite(store, { id: "prose", title: "Prose first", body: "Untyped." }, noProject);
+  noteWrite(store, { id: "prose", title: "Prose first", body: "Now typed.", schema: "offset_table", data: OFFSETS }, noProject);
   check("an untyped note can become typed", store.get("prose").record?.schema === "offset_table");
-  t = throws(() => noteWrite(store, { title: "half", body: "x", schema: "offset_table" }, noProject()), /'schema' and 'data' go together/);
+  t = throws(() => noteWrite(store, { title: "half", body: "x", schema: "offset_table" }, noProject), /'schema' and 'data' go together/);
   check("schema without data is an error", t.ok, t.detail);
-  t = throws(() => noteWrite(store, { title: "half", body: "x", data: OFFSETS }, noProject()), /'schema' and 'data' go together/);
+  t = throws(() => noteWrite(store, { title: "half", body: "x", data: OFFSETS }, noProject), /'schema' and 'data' go together/);
   check("data without schema is an error", t.ok, t.detail);
-  t = throws(() => noteWrite(store, { title: "unknown", body: "x", schema: "vtable", data: {} }, noProject()), /note schema "vtable" is unknown\. Known: struct_field_list, offset_table, algorithm_params/);
+  t = throws(() => noteWrite(store, { title: "unknown", body: "x", schema: "vtable", data: {} }, noProject), /note schema "vtable" is unknown\. Known: struct_field_list, offset_table, algorithm_params/);
   check("an unknown schema is an error naming the known ones", t.ok, t.detail);
-  t = throws(() => noteWrite(store, { title: "bad offsets", body: "x", schema: "offset_table", data: { ...OFFSETS, entries: [{ name: "money", offset: "416" }] } }, noProject()), /does not validate against offset_table@1:\n {2}- entries\.0\.offset: must be a hex string like 0x1A0\nSchema:\n\{/);
+  t = throws(() => noteWrite(store, { title: "bad offsets", body: "x", schema: "offset_table", data: { ...OFFSETS, entries: [{ name: "money", offset: "416" }] } }, noProject), /does not validate against offset_table@1:\n {2}- entries\.0\.offset: must be a hex string like 0x1A0\nSchema:\n\{/);
   check("invalid data is an error listing each issue and the schema", t.ok, t.detail);
-  t = throws(() => noteWrite(store, { title: "extra key", body: "x", schema: "algorithm_params", data: { ...CRC, notes: "no" } }, noProject()), /does not validate against algorithm_params@1/);
+  t = throws(() => noteWrite(store, { title: "extra key", body: "x", schema: "algorithm_params", data: { ...CRC, notes: "no" } }, noProject), /does not validate against algorithm_params@1/);
   check("a key the schema doesn't declare is invalid", t.ok, t.detail);
   check("…and nothing is written for invalid data", !existsSync(join(typedDir, "bad-offsets.md")) && !existsSync(join(typedDir, "extra-key.json")));
-  noteWrite(store, { id: "crc", title: "Checksum", body: "The save checksum.", schema: "algorithm_params", data: CRC, repo: "fuel" }, noProject());
-  noteWrite(store, { id: "crc-wrong", title: "Checksum guess", body: "Wrong guess.", schema: "algorithm_params", data: { ...CRC, variant: "normal" }, status: "retracted" }, noProject());
-  noteWrite(store, { id: "adler", title: "Other checksum", body: "In another project.", schema: "algorithm_params", data: { algorithm: "adler32", variant: "zlib", site: "0x00402000", params: [] }, repo: "other" }, noProject());
+  noteWrite(store, { id: "crc", title: "Checksum", body: "The save checksum.", schema: "algorithm_params", data: CRC, repo: "fuel" }, noProject);
+  noteWrite(store, { id: "crc-wrong", title: "Checksum guess", body: "Wrong guess.", schema: "algorithm_params", data: { ...CRC, variant: "normal" }, status: "retracted" }, noProject);
+  noteWrite(store, { id: "adler", title: "Other checksum", body: "In another project.", schema: "algorithm_params", data: { algorithm: "adler32", variant: "zlib", site: "0x00402000", params: [] }, repo: "other" }, noProject);
 
   console.log("\n-- note_schemas --");
   const listed = noteSchemas().schemas;
@@ -288,7 +287,7 @@ try {
     title: "Budget service resolves through a closure",
     body: "AdWordsServiceProvider binds BudgetServiceContract to a closure, so the concrete type is runtime-decided.",
     files: ["service.php"], tags: ["laravel", "di"], repo: "fuel",
-  }, stampFor("fuel"));
+  }, rootsFor);
   check("note written", w.written === "budget-service-resolves-through-a-closure", w.written);
   check("file was content-stamped", w.stampedFiles === 1, JSON.stringify(w));
 
@@ -312,25 +311,25 @@ try {
 
   console.log("\n-- stamps across a project's roots --");
   writeFileSync(join(pkg, "Contract.php"), "<?php interface Contract {}\n");
-  let n = noteWrite(store, { title: "Contract lives in the package", body: "It is declared in the alias root.", files: ["Contract.php"], repo: "fuel" }, stampFor("fuel"));
+  let n = noteWrite(store, { title: "Contract lives in the package", body: "It is declared in the alias root.", files: ["Contract.php"], repo: "fuel" }, rootsFor);
   let stored = store.get(n.written);
   check("a relative path found only in an alias records that alias", stored.files[0].root === "~/pkg" && stored.files[0].path === "Contract.php" && stored.files[0].sha256 !== "missing", JSON.stringify(stored.files));
   check("…and survives a round trip through the note file", /root: "~\/pkg"/.test(readFileSync(join(dir, "notes", `${n.written}.md`), "utf8")));
   check("…and resolves back to the alias for drift", noteGet(store, { id: n.written }, rootsFor).drift[0].state === "unchanged", JSON.stringify(noteGet(store, { id: n.written }, rootsFor).drift));
   writeFileSync(join(repo, "Contract.php"), "<?php interface Contract {}\n");
-  let t = throws(() => noteWrite(store, { title: "ambiguous", body: "x", files: ["Contract.php"], repo: "fuel" }, stampFor("fuel")), /exists in more than one root .*pass an absolute path/);
+  let t = throws(() => noteWrite(store, { title: "ambiguous", body: "x", files: ["Contract.php"], repo: "fuel" }, rootsFor), /exists in more than one root .*pass an absolute path/);
   check("a relative path present in two roots is an error", t.ok, t.detail);
-  n = noteWrite(store, { title: "absolute in alias", body: "x", files: [join(pkg, "Contract.php")], repo: "fuel" }, stampFor("fuel"));
+  n = noteWrite(store, { title: "absolute in alias", body: "x", files: [join(pkg, "Contract.php")], repo: "fuel" }, rootsFor);
   stored = store.get(n.written);
   check("an absolute path inside an alias is stored relative to it", stored.files[0].root === "~/pkg" && stored.files[0].path === "Contract.php", JSON.stringify(stored.files));
-  n = noteWrite(store, { title: "not there yet", body: "x", files: ["later.php"], repo: "fuel" }, stampFor("fuel"));
+  n = noteWrite(store, { title: "not there yet", body: "x", files: ["later.php"], repo: "fuel" }, rootsFor);
   stored = store.get(n.written);
   check("a relative path in no root is stamped missing against the main root", stored.files[0].sha256 === "missing" && stored.files[0].root === undefined, JSON.stringify(stored.files));
-  t = throws(() => noteWrite(store, { title: "no project", body: "x", files: ["service.php"], repo: "nowhere" }, stampFor("nowhere")), /can't stamp "service\.php" — no enabled index named "nowhere"/);
+  t = throws(() => noteWrite(store, { title: "no project", body: "x", files: ["service.php"], repo: "nowhere" }, rootsFor), /can't stamp "service\.php" — no enabled index named "nowhere"/);
   check("a relative path with no resolvable project is an error", t.ok, t.detail);
-  n = noteWrite(store, { title: "absolute without a project", body: "x", files: [join(pkg, "Contract.php")], repo: "nowhere" }, stampFor("nowhere"));
+  n = noteWrite(store, { title: "absolute without a project", body: "x", files: [join(pkg, "Contract.php")], repo: "nowhere" }, rootsFor);
   check("an absolute path needs no project", store.get(n.written).files[0].path === join(pkg, "Contract.php"), JSON.stringify(store.get(n.written).files));
-  check("a note without files needs no project", noteWrite(store, { title: "prose only", body: "x", repo: "nowhere" }, stampFor("nowhere")).stampedFiles === 0);
+  check("a note without files needs no project", noteWrite(store, { title: "prose only", body: "x", repo: "nowhere" }, rootsFor).stampedFiles === 0);
 
   writeFileSync(join(dir, "notes", "legacy.md"),
     `---\nid: "legacy"\ntitle: "Written before roots existed"\nstatus: current\ncreated: "2026-01-01T00:00:00Z"\nverified_on: null\nrepo: "fuel"\ntags: []\nsupersedes: []\nsuperseded_by: []\nfiles:\n  - path: "Contract.php"\n    sha256: "0000000000000000"\n    at: "2026-01-01T00:00:00Z"\n---\n\nOld note.\n`);
@@ -348,13 +347,13 @@ try {
 
   writeFileSync(join(other, "same.php"), "one\n");
   writeFileSync(join(repo, "same.php"), "two\n");
-  const otherNote = noteWrite(store, { title: "about the other project", body: "x", files: ["same.php"], repo: "other" }, stampFor("other"));
+  const otherNote = noteWrite(store, { title: "about the other project", body: "x", files: ["same.php"], repo: "other" }, rootsFor);
   writeFileSync(join(repo, "same.php"), "changed in fuel only\n");
   const hits = noteSearch(store, { query: "other project" }, rootsFor).results.filter((x) => x.id === otherNote.written);
   check("drift resolves against the note's own project, not the query's", hits[0]?.drift[0]?.state === "unchanged", JSON.stringify(hits));
 
   console.log("\n-- supersession --");
-  noteWrite(store, { title: "Budget service now binds concretely", body: "The closure was replaced with a direct binding.", repo: "fuel" }, stampFor("fuel"));
+  noteWrite(store, { title: "Budget service now binds concretely", body: "The closure was replaced with a direct binding.", repo: "fuel" }, rootsFor);
   const s = noteSupersede(store, { old_id: "budget-service-resolves-through-a-closure", new_id: "budget-service-now-binds-concretely" });
   check("both sides updated", s.updated.length === 2, JSON.stringify(s));
   const old = noteGet(store, { id: "budget-service-resolves-through-a-closure" }, rootsFor);
@@ -362,13 +361,13 @@ try {
   check("back-link recorded", old.supersededBy.includes("budget-service-now-binds-concretely"), JSON.stringify(old.supersededBy));
 
   console.log("\n-- retracted notes are hidden by default but retrievable --");
-  noteWrite(store, { title: "Wrong turn about caching", body: "Believed the cache was per-request. It is not.", status: "retracted", repo: "fuel" }, stampFor("fuel"));
+  noteWrite(store, { title: "Wrong turn about caching", body: "Believed the cache was per-request. It is not.", status: "retracted", repo: "fuel" }, rootsFor);
   check("hidden by default", noteSearch(store, { query: "caching wrong turn" }, rootsFor).results.length === 0);
   check("surfaced when asked", noteSearch(store, { query: "caching wrong turn", include_retracted: true }, rootsFor).results.length === 1);
 
   console.log("\n-- validation --");
   let threw = false;
-  try { noteWrite(store, { title: "x", body: "y", status: "bogus" }, stampFor("fuel")); } catch { threw = true; }
+  try { noteWrite(store, { title: "x", body: "y", status: "bogus" }, rootsFor); } catch { threw = true; }
   check("invalid status rejected", threw);
   threw = false;
   try { noteSupersede(store, { old_id: "nope", new_id: "also-nope" }); } catch { threw = true; }
@@ -378,39 +377,68 @@ try {
   t = throws(() => noteSupersede(store, { old_id: "budget-service-now-binds-concretely", new_id: "never-written" }), /no such note\(s\): never-written; nothing was changed/);
   check("supersede with one missing id is an error", t.ok, t.detail);
   check("…and writes nothing to the note that exists", store.get("budget-service-now-binds-concretely").supersededBy.length === 0 && store.get("budget-service-now-binds-concretely").status === "current");
-  t = throws(() => noteWrite(store, { title: "x", body: "y", supersedes: ["never-written"] }, stampFor("fuel")), /'supersedes' names note\(s\) that don't exist: never-written; nothing was written/);
+  t = throws(() => noteWrite(store, { title: "x", body: "y", supersedes: ["never-written"] }, rootsFor), /'supersedes' names note\(s\) that don't exist: never-written; nothing was written/);
   check("note_write superseding an id that doesn't exist is an error", t.ok, t.detail);
   check("…and writes nothing", !existsSync(join(dir, "notes", "x.md")));
   for (const bad of ["../escape", "a/b", "a\\b", ".."]) {
-    t = throws(() => noteWrite(store, { id: bad, title: "x", body: "y" }, stampFor("fuel")), /is not allowed: an id can't contain/);
+    t = throws(() => noteWrite(store, { id: bad, title: "x", body: "y" }, rootsFor), /is not allowed: an id can't contain/);
     check(`note id ${JSON.stringify(bad)} is rejected, not rewritten`, t.ok, t.detail);
   }
   t = throws(() => noteGet(store, { id: "../escape" }, rootsFor), /is not allowed/);
   check("note_get refuses an id that leaves the notes directory", t.ok, t.detail);
   for (const [label, files, pattern] of [
-    ["a string instead of a list", "service.php", /'files' must be a list of paths, got "service\.php"/],
+    ["a string instead of a list", "service.php", /'files' must be a list of non-empty strings, got "service\.php"/],
     ["a number in the list", ["service.php", 7], /files\[1\] = 7/],
     ["an empty path", [""], /files\[0\] = ""/],
     ["an object in the list", [{ path: "a.php" }], /files\[0\] = \{"path":"a\.php"\}/],
   ]) {
-    t = throws(() => noteWrite(store, { title: "bad files", body: "y", files, repo: "fuel" }, stampFor("fuel")), pattern);
+    t = throws(() => noteWrite(store, { title: "bad files", body: "y", files, repo: "fuel" }, rootsFor), pattern);
     check(`note_write rejects 'files' with ${label}`, t.ok, t.detail);
   }
   check("…and writes nothing", !existsSync(join(dir, "notes", "bad-files.md")));
+
+  console.log("\n-- arguments of the wrong type are errors, never coerced --");
+  const obj = { a: 1 };
+  const wrongType = [
+    ["note_write tags", () => noteWrite(store, { title: "typed args", body: "y", tags: ["ok", obj] }, rootsFor), /every entry in 'tags' must be a non-empty string; tags\[1\] = \{"a":1\}/],
+    ["note_write tags as a string", () => noteWrite(store, { title: "typed args", body: "y", tags: "ok" }, rootsFor), /'tags' must be a list of non-empty strings, got "ok"/],
+    ["note_write supersedes", () => noteWrite(store, { title: "typed args", body: "y", supersedes: [obj] }, rootsFor), /supersedes\[0\] = \{"a":1\}/],
+    ["note_write repo", () => noteWrite(store, { title: "typed args", body: "y", repo: obj }, rootsFor), /'repo' must be a non-empty string, got \{"a":1\}/],
+    ["note_write id", () => noteWrite(store, { title: "typed args", body: "y", id: obj }, rootsFor), /'id' must be a non-empty string, got \{"a":1\}/],
+    ["note_write blank id", () => noteWrite(store, { title: "typed args", body: "y", id: " " }, rootsFor), /'id' must be a non-empty string, got " "/],
+    ["note_write status", () => noteWrite(store, { title: "typed args", body: "y", status: obj }, rootsFor), /'status' must be a non-empty string, got \{"a":1\}/],
+    ["note_write title", () => noteWrite(store, { title: obj, body: "y" }, rootsFor), /'title' must be a non-empty string, got \{"a":1\}/],
+    ["note_write schema", () => noteWrite(store, { title: "typed args", body: "y", schema: obj, data: {} }, rootsFor), /'schema' must be a non-empty string, got \{"a":1\}/],
+    ["note_write verified_on", () => noteWrite(store, { title: "typed args", body: "y", verified_on: obj }, rootsFor), /'verified_on' must be an ISO 8601 date or date-time, got \{"a":1\}/],
+    ["note_search query", () => noteSearch(store, { query: obj }, rootsFor), /'query' must be a string, got \{"a":1\}/],
+    ["note_search include_retracted", () => noteSearch(store, { query: "x", include_retracted: "false" }, rootsFor), /'include_retracted' must be true or false, got "false"/],
+    ["note_search repo", () => noteSearch(store, { query: "x", repo: obj }, rootsFor), /'repo' must be a non-empty string, got \{"a":1\}/],
+    ["note_query include_retracted", () => noteQuery(store, { schema: "offset_table", include_retracted: 1 }, rootsFor), /'include_retracted' must be true or false, got 1/],
+    ["note_query repo", () => noteQuery(store, { schema: "offset_table", repo: obj }, rootsFor), /'repo' must be a non-empty string, got \{"a":1\}/],
+    ["note_query schema", () => noteQuery(store, { schema: obj }, rootsFor), /'schema' must be a non-empty string, got \{"a":1\}/],
+  ];
+  for (const [label, fn, pattern] of wrongType) {
+    t = throws(fn, pattern);
+    check(`${label}: an object or wrong type is an error showing the value as JSON`, t.ok && !t.detail.includes("[object Object]"), t.detail);
+  }
+  check("…and none of them wrote a note", !existsSync(join(dir, "notes", "typed-args.md")));
+  t = throws(() => noteWrite(store, { title: "x", body: "y", status: "bogus" }, rootsFor), /'status' must be current\|superseded\|retracted, got "bogus"/);
+  check("an unknown status string is named as JSON", t.ok, t.detail);
+  check("an empty query is still allowed and lists notes", noteSearch(store, { query: "" }, rootsFor).total > 0);
   for (const bad of ["yesterday", "2026-13-45", 20260914]) {
-    t = throws(() => noteWrite(store, { title: "dated", body: "y", verified_on: bad }, stampFor("fuel")), /'verified_on' must be an ISO 8601 date or date-time/);
+    t = throws(() => noteWrite(store, { title: "dated", body: "y", verified_on: bad }, rootsFor), /'verified_on' must be an ISO 8601 date or date-time/);
     check(`verified_on ${JSON.stringify(bad)} is an error`, t.ok, t.detail);
   }
-  n = noteWrite(store, { title: "dated", body: "y", verified_on: "2026-09-14" }, stampFor("fuel"));
+  n = noteWrite(store, { title: "dated", body: "y", verified_on: "2026-09-14" }, rootsFor);
   check("an ISO date verified_on is stored as given", store.get(n.written).verifiedOn === "2026-09-14");
 
   console.log("\n-- note file format --");
-  n = noteWrite(store, { title: 'He said "hi", then \\left', body: "Commas, quotes, and backslashes.", tags: ["a,b", 'c"d', "line\nbreak"] }, stampFor("fuel"));
+  n = noteWrite(store, { title: 'He said "hi", then \\left', body: "Commas, quotes, and backslashes.", tags: ["a,b", 'c"d', "line\nbreak"] }, rootsFor);
   stored = store.get(n.written);
   check("a title with quotes, commas, and backslashes round-trips exactly", stored.title === 'He said "hi", then \\left', JSON.stringify(stored.title));
   check("tags with commas, quotes, and newlines round-trip exactly", JSON.stringify(stored.tags) === JSON.stringify(["a,b", 'c"d', "line\nbreak"]), JSON.stringify(stored.tags));
   check("new notes are written in format 2", readFileSync(join(dir, "notes", `${n.written}.md`), "utf8").startsWith("---\nformat: 2\n"));
-  noteWrite(store, { id: "legacy", title: "Written before roots existed", body: "Old note, rewritten." }, stampFor("fuel"));
+  noteWrite(store, { id: "legacy", title: "Written before roots existed", body: "Old note, rewritten." }, rootsFor);
   check("an older-format note is migrated to format 2 when it is next written", readFileSync(join(dir, "notes", "legacy.md"), "utf8").startsWith("---\nformat: 2\n"));
   check("…keeping its stamps and repo", store.get("legacy").files[0]?.path === "Contract.php" && store.get("legacy").repo === "fuel", JSON.stringify(store.get("legacy")));
 
