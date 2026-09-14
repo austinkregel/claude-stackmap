@@ -1,13 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { NoteStore, type Note } from "./store.js";
-import { scoreNotes } from "./search.js";
+import { NoteStore, type Note, type RootsLookup } from "./store.js";
+import { scoreNotes, type RootsFor } from "./search.js";
+
+/** A positive integer `limit`, the default when absent; anything else is an error, not a silent default. */
+function limitArg(tool: string, value: unknown, fallback: number): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 1) throw new Error(`${tool}: 'limit' must be a number of at least 1, got ${JSON.stringify(value)}.`);
+  return Math.trunc(value);
+}
 
 function slug(title: string): string {
   const base = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
   return base || `note-${randomUUID().slice(0, 8)}`;
 }
 
-export function noteWrite(store: NoteStore, args: any, repoRoot: string | null) {
+export function noteWrite(store: NoteStore, args: any, stampRoots: RootsLookup) {
   if (typeof args.title !== "string" || !args.title.trim()) throw new Error("note_write requires 'title'.");
   if (typeof args.body !== "string" || !args.body.trim()) throw new Error("note_write requires 'body'.");
   const status = args.status ?? "current";
@@ -28,7 +35,7 @@ export function noteWrite(store: NoteStore, args: any, repoRoot: string | null) 
     repo: args.repo ?? existing?.repo ?? null,
     supersedes: Array.isArray(args.supersedes) ? args.supersedes.map(String) : (existing?.supersedes ?? []),
     supersededBy: existing?.supersededBy ?? [],
-    files: files.length ? store.stamp(files, repoRoot) : (existing?.files ?? []),
+    files: files.length ? store.stamp(files, stampRoots) : (existing?.files ?? []),
     body: args.body.trim(),
   };
   store.write(note);
@@ -49,9 +56,9 @@ export function noteWrite(store: NoteStore, args: any, repoRoot: string | null) 
   };
 }
 
-export function noteSearch(store: NoteStore, args: any, repoRoot: string | null) {
-  const limit = Number.isFinite(args.limit) ? Math.max(1, Math.trunc(args.limit)) : 10;
-  const scored = scoreNotes(store, String(args.query ?? ""), repoRoot, {
+export function noteSearch(store: NoteStore, args: any, rootsFor: RootsFor) {
+  const limit = limitArg("note_search", args.limit, 10);
+  const scored = scoreNotes(store, String(args.query ?? ""), rootsFor, {
     includeRetracted: Boolean(args.include_retracted),
     repo: args.repo ?? null,
   });
@@ -74,11 +81,11 @@ export function noteSearch(store: NoteStore, args: any, repoRoot: string | null)
   };
 }
 
-export function noteGet(store: NoteStore, args: any, repoRoot: string | null) {
+export function noteGet(store: NoteStore, args: any, rootsFor: RootsFor) {
   if (typeof args.id !== "string" || !args.id.trim()) throw new Error("note_get requires 'id'.");
   const note = store.get(args.id.trim());
   if (!note) return { found: false, id: args.id, notesDir: store.directory };
-  const drift = store.drift(note, repoRoot);
+  const drift = store.drift(note, rootsFor(note.repo));
   const changed = drift.filter((d) => d.state !== "unchanged");
   return {
     found: true, ...note, drift,
