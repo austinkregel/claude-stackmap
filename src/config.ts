@@ -23,7 +23,7 @@ export const IndexConfigSchema = z.object({
   /** Directories never scanned, merged with adapter + global defaults. */
   exclude: z.array(z.string()).optional(),
   /** Free-form per-adapter settings. */
-  options: z.record(z.unknown()).default({}),
+  options: z.record(z.string(), z.unknown()).default({}),
   /** Set false to keep the entry but skip it at load time. */
   enabled: z.boolean().default(true),
 });
