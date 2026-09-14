@@ -14,6 +14,20 @@ export function parseArgs(argv) {
   return { flags, positionals };
 }
 
+/**
+ * A numeric flag, or undefined when absent. Anything that isn't a finite number at or above `min`
+ * (and a whole number when `integer`) throws, so a typo can't silently disable a limit.
+ */
+export function numberFlag(flags, name, { min = 0, integer = false } = {}) {
+  if (!(name in flags)) return undefined;
+  const raw = flags[name];
+  const n = raw === true ? NaN : Number(raw);
+  if (!Number.isFinite(n) || n < min || (integer && !Number.isInteger(n))) {
+    throw new Error(`--${name} expects ${integer ? "a whole number" : "a number"} of at least ${min}, got ${raw === true ? "no value" : `"${raw}"`}`);
+  }
+  return n;
+}
+
 /** `--where k=v` (repeatable via comma) -> predicate over a row object. */
 export function buildPredicate(where) {
   if (!where || where === true) return () => true;
