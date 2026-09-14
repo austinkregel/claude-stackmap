@@ -307,7 +307,6 @@ when set (it must be absolute).
   built at runtime is not checked.
 - **Edit hooks see edits, not shell writes.** A directive written with `sed -i` or `cat >` is not
   seen by `no-suppress`. Pest's `->skip()` chain is not matched.
-- **Rendering of a hook's `systemMessage` in the interactive transcript is unverified.**
 
 ## Development
 
