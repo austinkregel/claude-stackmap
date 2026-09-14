@@ -8,7 +8,10 @@ import { acrossScope } from "./adapters/scope.js";
 import type { EdgeKind, ResolutionEdge } from "./adapters/types.js";
 import { existsSync } from "node:fs";
 import { NoteStore, type RootsLookup } from "./notes/store.js";
-import { noteWrite, noteSearch, noteGet, noteSupersede } from "./notes/tools.js";
+import { noteWrite, noteSearch, noteGet, noteSupersede, noteQuery, noteSchemas } from "./notes/tools.js";
+import { NOTE_SCHEMAS } from "./notes/schemas.js";
+import { countArg } from "./args.js";
+import { COMPARATORS } from "./notes/query.js";
 
 const SCOPE_ARG = {
   scope: {
@@ -105,12 +108,50 @@ const TOOLS = [
         tags: { type: "array", items: { type: "string" } },
         repo: { type: "string", description: "Project this applies to (a configured project name)." },
         status: { type: "string", enum: ["current", "superseded", "retracted"], description: "Default current. Use retracted for a recorded wrong turn — it is kept at low weight so it is not repeated." },
-        supersedes: { type: "array", items: { type: "string" }, description: "Note ids this replaces; they are demoted and back-linked automatically." },
-        id: { type: "string", description: "Stable id. Omit to derive from the title; pass an existing id to update." },
+        supersedes: { type: "array", items: { type: "string" }, description: "Note ids this replaces; they must exist, and they are demoted and back-linked automatically." },
+        id: { type: "string", description: "Stable id. Omit to derive from the title; pass an existing id to update. Can't contain '/', '\\', or '..'." },
+        verified_on: { type: "string", description: "ISO 8601 date or date-time the conclusion was verified. Default: now." },
+        schema: {
+          type: "string",
+          enum: NOTE_SCHEMAS.map((s) => s.name),
+          description: "Makes this a typed note: the record in 'data' is validated against this shipped schema (see note_schemas) and stored beside the note. Requires 'data'. An existing typed note can't change schema.",
+        },
+        data: { type: "object", description: "The typed record for 'schema', returned exactly as stored. Requires 'schema'. Omit both to keep an existing note's record." },
       },
       required: ["title", "body"],
       additionalProperties: false,
     },
+  },
+  {
+    name: "note_query",
+    description:
+      "Return typed records of one schema that match a filter, exactly as stored, sorted by id. Unranked, unlike note_search. " +
+      "Records that no longer validate are listed in 'invalid', and unreadable note files in 'malformedFiles' — neither is dropped silently.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        schema: { type: "string", enum: NOTE_SCHEMAS.map((s) => s.name) },
+        filter: {
+          type: "object",
+          description:
+            'A group: { "operator": "and" | "or", "conditions": [condition | group, ...] } (empty conditions match everything). ' +
+            'A condition: { "parameter": "fields[].type", "comparator": "EQUAL", "value": "u32" }. A parameter is dotted field names; "name[]" means any element of list "name". ' +
+            `Comparators: ${COMPARATORS.join(", ")}. EXISTS/MISSING take no value; IN/NOTIN take a list. ` +
+            "A value at any [] element counts; NOT_* and MISSING mean no element matches. Strings and REGEX are case-insensitive; ranges compare numbers numerically and strings as text. An unknown parameter or comparator is an error.",
+        },
+        repo: { type: "string", description: "Only records for this project (records with no repo also match, as in note_search)." },
+        include_retracted: { type: "boolean", description: "Include retracted records (default false)." },
+        limit: { type: "number", description: "Max records (default 100)." },
+        offset: { type: "number", description: "Records to skip, for paging (default 0)." },
+      },
+      required: ["schema"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "note_schemas",
+    description: "List the typed-note schemas shipped with stackmap, each with its version, description, and the JSON Schema a record must satisfy.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "note_search",
@@ -170,15 +211,6 @@ function checkArguments(tool: string, args: Record<string, unknown>) {
   }
 }
 
-/** A non-negative integer argument, the default when absent; anything else is an error. */
-function countArg(tool: string, name: string, value: unknown, fallback: number, min: number): number {
-  if (value === undefined) return fallback;
-  if (typeof value !== "number" || !Number.isFinite(value) || value < min) {
-    throw new Error(`${tool}: '${name}' must be a number of at least ${min}, got ${JSON.stringify(value)}.`);
-  }
-  return Math.trunc(value);
-}
-
 /** The roots of a named project (or the default one), or why they can't be found. */
 function rootsFor(config: Config, repo: string | null): RootsLookup {
   try {
@@ -186,6 +218,20 @@ function rootsFor(config: Config, repo: string | null): RootsLookup {
   } catch (err) {
     return { roots: null, reason: (err as Error).message };
   }
+}
+
+/**
+ * One note store per notes directory for the life of the process, so its caches actually serve
+ * repeat calls. The config is re-read on every call; a changed notesDir gets a new store and the old
+ * one's watcher is closed.
+ */
+let notes: { dir: string; store: NoteStore } | null = null;
+function noteStoreFor(notesDir: string): NoteStore {
+  const dir = expandPath(notesDir);
+  if (notes?.dir === dir) return notes.store;
+  notes?.store.close();
+  notes = { dir, store: new NoteStore(dir) };
+  return notes.store;
 }
 
 const server = new Server(
@@ -235,13 +281,16 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       return text({ configPath: path, defaultIndex: config.defaultIndex ?? null, indexes: rows, notLoaded: config.indexErrors });
     }
 
+    if (req.params.name === "note_schemas") return text(noteSchemas());
+
     if (req.params.name.startsWith("note_")) {
-      const store = NoteStore.fromConfig(config.notesDir);
+      const store = noteStoreFor(config.notesDir);
       const lookup = (repo: string | null) => rootsFor(config, repo);
       if (req.params.name === "note_write") return text(noteWrite(store, args, lookup(args.repo ?? null)));
       if (req.params.name === "note_search") return text(noteSearch(store, args, lookup));
       if (req.params.name === "note_get") return text(noteGet(store, args, lookup));
       if (req.params.name === "note_supersede") return text(noteSupersede(store, args));
+      if (req.params.name === "note_query") return text(noteQuery(store, args, lookup));
     }
 
     const scope = selectScope(config, args.scope);
