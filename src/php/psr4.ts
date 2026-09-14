@@ -6,15 +6,21 @@ export interface Psr4Map {
   prefixes: Array<{ prefix: string; dirs: string[] }>;
 }
 
-/** Read PSR-4 roots out of composer.json (`autoload` + `autoload-dev`). */
-export function readPsr4(repoRoot: string): Psr4Map {
+export type Psr4Read = { found: true; map: Psr4Map } | { found: false; path: string };
+
+/**
+ * Read PSR-4 roots out of a root's composer.json (`autoload` + `autoload-dev`). A missing
+ * composer.json is reported as `found: false`, for the caller to decide how loudly to say so; one
+ * that can't be read or isn't valid JSON throws, naming the file.
+ */
+export function readPsr4(repoRoot: string): Psr4Read {
   const composer = join(repoRoot, "composer.json");
-  if (!existsSync(composer)) return { prefixes: [] };
+  if (!existsSync(composer)) return { found: false, path: composer };
   let json: any;
   try {
     json = JSON.parse(readFileSync(composer, "utf8"));
-  } catch {
-    return { prefixes: [] };
+  } catch (err) {
+    throw new Error(`stackmap: ${composer} can't be read as JSON: ${(err as Error).message}`);
   }
   const merged: Record<string, string[]> = {};
   for (const key of ["autoload", "autoload-dev"]) {
@@ -29,7 +35,7 @@ export function readPsr4(repoRoot: string): Psr4Map {
   const prefixes = Object.entries(merged)
     .map(([prefix, dirs]) => ({ prefix, dirs }))
     .sort((a, b) => b.prefix.length - a.prefix.length);
-  return { prefixes };
+  return { found: true, map: { prefixes } };
 }
 
 /** Fully-qualified class name -> candidate file paths (relative to repo root). */
