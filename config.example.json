@@ -75,6 +75,7 @@
   },
   "houseRules": {
     "enabled": true,
+    "subagents": true,
     "mode": "extend",
     "files": [],
     "disable": []
