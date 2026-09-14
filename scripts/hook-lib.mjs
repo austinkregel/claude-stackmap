@@ -80,6 +80,11 @@ export function failClosed(hook, what) {
   );
 }
 
+/** Tell the user something without blocking or reporting an error; stderr on exit 0 is never shown. */
+export function notifyUser(hook, text) {
+  emit({ systemMessage: `stackmap ${hook}: ${text}` });
+}
+
 /** Informational hook: fail open, visibly. Exit 1 is non-blocking; the user sees `systemMessage`. */
 export function reportError(hook, err) {
   const message = err instanceof Error ? err.message : String(err);
