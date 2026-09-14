@@ -9,6 +9,10 @@
  * Then a list, generated from the guard config, of which rules the hooks enforce, so the text never
  * claims enforcement the config has switched off.
  *
+ * In the default, an `<!-- enforced-by: name -->` line directly above a `## ` heading or a `- `
+ * bullet drops that section or bullet while the named guard is enabled; the enforcement list and
+ * the guard's block message carry it instead. `houseRules.subagents: false` skips SubagentStart.
+ *
  * Fails open, visibly, and never partially: a configured file that is missing, unreadable, or
  * empty, an unknown `disable` id, or a total over the 10,000-character hook output limit injects
  * nothing and reports why.
@@ -30,31 +34,82 @@ const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_RULES = join(pluginRoot, "house-rules", "default.md");
 
 const ID_LINE = /^<!--\s*id:\s*([a-z0-9-]+)\s*-->$/;
+const ENFORCED_BY_LINE = /^<!--\s*enforced-by:\s*([^\s]+)\s*-->$/;
+
+/** Whether the guard an `enforced-by` name refers to is currently enforcing. Throws on an unknown name. */
+function isEnforced(name, guard) {
+  const [key, category, ...rest] = name.split(":");
+  const known = () => `known: guard, noTruncate, commitMessage, noSuppress, ${CATEGORIES.map((c) => `noSuppress:${c}`).join(", ")}`;
+  if (rest.length || (category !== undefined && key !== "noSuppress")) throw new Error(`unknown enforced-by name "${name}" (${known()})`);
+  switch (key) {
+    case "guard":
+      return guard.enabled;
+    case "noTruncate":
+      return guard.noTruncate.enabled;
+    case "commitMessage":
+      return guard.commitMessage.enabled;
+    case "noSuppress":
+      if (category === undefined) return guard.noSuppress.enabled;
+      if (!CATEGORIES.includes(category)) throw new Error(`unknown enforced-by name "${name}" (${known()})`);
+      return guard.noSuppress.enabled && !guard.noSuppress.disableCategories.includes(category);
+    default:
+      throw new Error(`unknown enforced-by name "${name}" (${known()})`);
+  }
+}
 
 /**
- * Split a ruleset into its preamble and `## ` sections. Each section in the shipped default must
- * carry an id line directly under its heading; a missing or duplicate id is a defect in that file.
+ * Split a ruleset into its preamble and `## ` sections, each a list of blocks. Each section in the
+ * shipped default must carry an id line directly under its heading; a missing or duplicate id, or an
+ * `enforced-by` line that tags neither a heading nor a bullet, is a defect in that file.
  */
 function parseDefault(text) {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const preamble = [];
   const sections = [];
   let current = null;
+  let pending = null; // enforced-by name for the heading or bullet on the next line
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    const enforced = ENFORCED_BY_LINE.exec(line.trim());
+    if (enforced) {
+      const next = lines[i + 1] ?? "";
+      if (!next.startsWith("## ") && !next.startsWith("- ")) {
+        throw new Error(`${DEFAULT_RULES}:${i + 1}: an enforced-by line must be directly above a "## " heading or a "- " bullet`);
+      }
+      pending = enforced[1];
+      continue;
+    }
     if (line.startsWith("## ")) {
       const idMatch = ID_LINE.exec((lines[i + 1] ?? "").trim());
       if (!idMatch) throw new Error(`${DEFAULT_RULES}: section "${line}" has no "<!-- id: … -->" line under its heading`);
       if (sections.some((s) => s.id === idMatch[1])) throw new Error(`${DEFAULT_RULES}: duplicate section id "${idMatch[1]}"`);
-      current = { id: idMatch[1], lines: [line] };
+      current = { id: idMatch[1], enforcedBy: pending, blocks: [{ enforcedBy: null, lines: [line] }] };
+      pending = null;
       sections.push(current);
       i++; // the id line is metadata, not rule text
       continue;
     }
-    (current ? current.lines : preamble).push(line);
+    const blocks = current ? current.blocks : preamble;
+    const last = blocks[blocks.length - 1];
+    if (line.startsWith("- ")) {
+      blocks.push({ enforcedBy: pending, bullet: true, lines: [line] });
+      pending = null;
+    } else if (last?.bullet && /^\s+\S/.test(line)) {
+      last.lines.push(line); // a wrapped bullet's continuation line
+    } else {
+      blocks.push({ enforcedBy: null, lines: [line] });
+    }
   }
-  const render = (ls) => ls.join("\n").trim();
-  return { preamble: render(preamble), sections: sections.map((s) => ({ id: s.id, text: render(s.lines) })) };
+  return { preamble, sections };
+}
+
+/** Render blocks, leaving out the ones whose guard is enforcing. */
+function renderBlocks(blocks, guard) {
+  return blocks
+    .filter((b) => !(b.enforcedBy && isEnforced(b.enforcedBy, guard)))
+    .flatMap((b) => b.lines)
+    .join("\n")
+    .trim();
 }
 
 function readRulesFile(path) {
@@ -113,8 +168,15 @@ function assemble(cfg) {
         `houseRules.disable names unknown section id(s) ${unknown.join(", ")} (known: ${known.join(", ")}); no house rules were injected`,
       );
     }
-    const kept = parsed.sections.filter((s) => !houseRules.disable.includes(s.id));
-    parts.push({ source: `default rules (${kept.length} of ${known.length} sections)`, text: [parsed.preamble, ...kept.map((s) => s.text)].join("\n\n") });
+    // Every enforced-by name is checked, including ones in disabled sections, so a typo can't hide.
+    for (const s of parsed.sections) {
+      for (const name of [s.enforcedBy, ...s.blocks.map((b) => b.enforcedBy)]) if (name) isEnforced(name, guard);
+    }
+    const kept = parsed.sections.filter(
+      (s) => !houseRules.disable.includes(s.id) && !(s.enforcedBy && isEnforced(s.enforcedBy, guard)),
+    );
+    const text = [renderBlocks(parsed.preamble, guard), ...kept.map((s) => renderBlocks(s.blocks, guard))].join("\n\n");
+    parts.push({ source: `default rules (${kept.length} of ${known.length} sections)`, text });
   }
   for (const file of houseRules.files) parts.push({ source: file, text: readRulesFile(file) });
   parts.push({ source: "enforcement list", text: enforcementNote(guard) });
@@ -137,6 +199,7 @@ async function main() {
 
   const cfg = loadHookConfig();
   if (!cfg.houseRules.enabled) return;
+  if (event === "SubagentStart" && !cfg.houseRules.subagents) return;
 
   addContext(event, assemble(cfg));
 }
