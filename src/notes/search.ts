@@ -27,6 +27,40 @@ function tokenize(s: string): string[] {
   return s.toLowerCase().split(/[^a-z0-9_]+/).filter((t) => t.length > 1);
 }
 
+/**
+ * Tokens for typed data and for the data side of a query, so values like `3.14`, `0x1A0`, or `2` stay
+ * searchable:
+ *   1. lowercase; split on whitespace and anything but letters, digits, `_`, `.`, `-`, `:`, `+`;
+ *   2. trim `.`, `-`, `:`, `+` from both ends, keeping a `-` or `+` directly before a digit;
+ *   3. keep tokens of any length;
+ *   4. a token containing `.`, `-`, or `:` also yields its parts (`fields.offset` → `fields`, `offset`).
+ */
+export function dataTokens(text: string): string[] {
+  const out: string[] = [];
+  for (const raw of text.toLowerCase().split(/[^\p{L}\p{N}_.:+-]+/u)) {
+    let t = raw.replace(/[.:+-]+$/, "");
+    const lead = /^[.:+-]+/.exec(t)?.[0] ?? "";
+    if (lead) {
+      const rest = t.slice(lead.length);
+      const sign = lead[lead.length - 1]!;
+      t = (sign === "-" || sign === "+") && /^\p{N}/u.test(rest) ? sign + rest : rest;
+    }
+    if (!t) continue;
+    out.push(t);
+    if (/[.:-]/.test(t)) for (const part of t.split(/[.:-]+/)) if (part && part !== t) out.push(part);
+  }
+  return out;
+}
+
+/** Every key and scalar value of a typed record's data, as data tokens. Numbers use their JSON text. */
+export function tokenizeData(value: unknown): string[] {
+  if (value === null || typeof value === "boolean" || typeof value === "number") return dataTokens(JSON.stringify(value));
+  if (typeof value === "string") return dataTokens(value);
+  if (Array.isArray(value)) return value.flatMap(tokenizeData);
+  if (value && typeof value === "object") return Object.entries(value).flatMap(([k, v]) => [...dataTokens(k), ...tokenizeData(v)]);
+  return [];
+}
+
 interface Doc {
   note: Note;
   tf: Map<string, number>;
@@ -53,6 +87,7 @@ function buildDoc(note: Note): Doc {
   };
   add(tokenize(`${note.title} ${note.tags.join(" ")}`), FIELD_BOOST.title);
   add(tokenize(note.body), FIELD_BOOST.body);
+  if (note.record) add([...dataTokens(note.record.schema), ...tokenizeData(note.record.data)], FIELD_BOOST.body);
   let len = 0;
   for (const v of tf.values()) len += v;
   return { note, tf, terms: [...tf.keys()], len };
@@ -108,7 +143,8 @@ export function scoreNotes(
   const docs = notes.map(docFor);
   const { vocab, avgdl } = indexFor(docs);
   const N = docs.length;
-  const terms = [...new Set(tokenize(query))];
+  // Both tokenizers, so a query can match prose words and data values like `3.14` or `2`.
+  const terms = [...new Set([...tokenize(query), ...dataTokens(query)])];
 
   // Accumulate BM25 per document, touching only documents that match something.
   const acc = new Map<number, number>();
