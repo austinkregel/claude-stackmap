@@ -34,12 +34,14 @@ for (const N of [100, 1000, 5000]) {
       `supersedes: []\nsuperseded_by: []\nfiles:\n---\n\nThe amortization schedule rounds half-to-even, not half-up.\n`);
 
     const store = new NoteStore(dir);
+    // These notes stamp no files, so no project roots are needed to resolve drift.
+    const noRoots = () => ({ roots: null, reason: "the benchmark configures no project" });
     const t0 = process.hrtime.bigint();
-    const cold = noteSearch(store, { query: "amortization rounding", limit: 5 }, null);
+    const cold = noteSearch(store, { query: "amortization rounding", limit: 5 }, noRoots);
     const coldMs = Number(process.hrtime.bigint() - t0) / 1e6;
 
     const t1 = process.hrtime.bigint();
-    for (let i = 0; i < 10; i++) noteSearch(store, { query: "amortization rounding", limit: 5 }, null);
+    for (let i = 0; i < 10; i++) noteSearch(store, { query: "amortization rounding", limit: 5 }, noRoots);
     const warmMs = Number(process.hrtime.bigint() - t1) / 1e6 / 10;
 
     console.log(`\nN=${N + 1} notes`);
