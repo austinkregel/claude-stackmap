@@ -257,12 +257,18 @@ causes over band-aids, reusing what exists, planning, never truncating output, s
 briefings, commits, and keeping docs current. The injected text ends with a list, generated from
 the `guard` config, of which rules the hooks enforce.
 
+Default rule text that a guard enforces is left out while that guard is enabled, since the
+enforcement list and the guard's block message carry it: the `command-output` section
+(`noTruncate`), the dead-code bullet (`noSuppress` with the `dead-code` category), and the
+commit-message bullet (`commitMessage`). Turning the guard off brings the text back.
+
 ```json
-"houseRules": { "enabled": true, "mode": "extend", "files": [], "disable": [] }
+"houseRules": { "enabled": true, "subagents": true, "mode": "extend", "files": [], "disable": [] }
 ```
 
 | Key | Meaning |
 |---|---|
+| `subagents` | `false` skips injection at `SubagentStart`. Guards still apply inside sub-agents. |
 | `mode` | `extend`: the default ruleset, then `files`. `replace`: only `files`. |
 | `files` | Markdown rule files, injected in order. Absolute or `~/` paths. |
 | `disable` | default section ids to drop (`extend` only): `ask`, `prove`, `verify`, `no-fallbacks`, `no-narrowing`, `root-cause`, `reuse`, `plan`, `command-output`, `sub-agents`, `commits`, `write-it-down` |
