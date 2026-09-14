@@ -124,6 +124,11 @@ so don't rename them. A missing/empty file, unknown id, or a total over the 10,0
 output limit injects nothing and reports why. The enforcement list at the end is generated from the
 `guard` config; keep it generated.
 
+An `<!-- enforced-by: name -->` line directly above a `## ` heading or `- ` bullet in the default
+leaves that text out while the named guard (`guard`, `noTruncate`, `commitMessage`, `noSuppress`, or
+`noSuppress:<category>`) is enabled. Tag only text the guard's block message fully covers. An
+unknown name or a misplaced tag injects nothing. `houseRules.subagents: false` skips SubagentStart.
+
 ### Review enforcement is a two-hook state machine
 
 `review-arm.mjs` (UserPromptSubmit) writes a session marker only when the prompt literally invokes
