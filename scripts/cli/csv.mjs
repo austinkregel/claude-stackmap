@@ -43,8 +43,7 @@ export async function csv(argv) {
       const cells = rows[i];
       if (cells.length === 1 && cells[0] === "") continue; // trailing newline
       stats.dataRows++;
-      // A row whose width differs from the header is the exact shape of silent data loss:
-      // counted, reported, and still evaluated rather than silently dropped.
+      // A ragged row is counted and reported, and still evaluated rather than dropped.
       if (cells.length !== header.length) stats.ragged++;
       const row = {};
       header.forEach((h, j) => { row[h] = cells[j] ?? ""; });
