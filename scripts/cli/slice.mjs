@@ -4,8 +4,7 @@ import { parseArgs } from "./args.mjs";
 
 /**
  * Slice a large file without loading it. Always reports total size/lines alongside what was
- * emitted, so a truncated read is visible instead of silent — the failure mode where a partial
- * write quietly reduces a multi-MB log to a single entry.
+ * emitted, so a truncated read is visible instead of silent.
  */
 export async function slice(argv) {
   const { flags, positionals } = parseArgs(argv);
