@@ -10,9 +10,10 @@ repo, each with a different runtime and different failure semantics:
 | Surface | Entry point | Runs from | Needs a build? |
 |---|---|---|---|
 | MCP server (`stackmap_*`, `note_*` tools) | `scripts/launch.sh` → `dist/index.js` | compiled TS | **yes** |
-| Hooks (guards, house rules, freshness, fetch sanity, review arm/check) | `hooks/hooks.json` → `scripts/*.sh` → `scripts/*.mjs` | plain `.mjs`, never `dist/` | no |
+| Hooks (guards, house rules, freshness, fetch sanity, skill and audit checks) | `hooks/hooks.json` → `scripts/*.sh` → `scripts/*.mjs` | plain `.mjs`, never `dist/` | no |
 | `sm` CLI | `bin/sm` → `scripts/cli/main.mjs` | plain `.mjs` | no |
 | Skills | `skills/*/SKILL.md` | markdown | no |
+| Agents | `agents/*.md` (auto-discovered; no `agents` key in `plugin.json`) | markdown | no |
 
 Every guard rule is narrow enough not to fire on ordinary work, with a test for the safe lookalike
 it must not catch. Every blind spot is reported as a count or a caveat.
@@ -37,7 +38,8 @@ node scripts/truncate-test.mjs      # no-truncate
 node scripts/suppress-test.mjs      # no-suppress + suppression catalog integrity
 node scripts/house-rules-test.mjs   # house rules: extend/replace/disable and every failure path
 node scripts/hooks-test.mjs         # hook-open.sh, freshness, fetch sanity, config.example.json
-node scripts/review-test.mjs        # review arm/check enforcement
+node scripts/skill-check-test.mjs   # /review and /double-blind closing blocks, arming, loop safety
+node scripts/audit-test.mjs         # the adversarial auditor's report check
 node scripts/extract-test.mjs       # PHP extractors + adapter wiring, inline fixtures  (needs dist/)
 node scripts/notes-test.mjs         # note store: supersession, retraction weighting, drift  (needs dist/)
 node scripts/smoke.mjs              # boots dist/index.js over stdio, exercises every tool + error paths
@@ -76,7 +78,8 @@ Both wrappers accept only `[a-z0-9-]+.mjs` script names.
 - `scripts/guard.sh <script>` → **fails closed** (exit 2). Wraps `guard.mjs`, `no-truncate.mjs`,
   `no-suppress.mjs`. Any failure to evaluate a call blocks it; the suites assert those paths.
 - `scripts/hook-open.sh <script>` → **fails open, visibly** (exit 1 with a `systemMessage`). Wraps
-  `freshness.mjs`, `house-rules.mjs`, `fetch-sanity.mjs`, `review-arm.mjs`, `review-check.mjs`.
+  `freshness.mjs`, `house-rules.mjs`, `fetch-sanity.mjs`, `skill-arm.mjs`, `skill-check.mjs`,
+  `audit-check.mjs`.
 
 `scripts/hook-lib.mjs` owns the wire protocol. Its helpers set `process.exitCode` and return; never
 call `process.exit()` after writing a decision. Stop blocks use top-level `{ "decision": "block", "reason" }`.
@@ -129,12 +132,29 @@ leaves that text out while the named guard (`guard`, `noTruncate`, `commitMessag
 `noSuppress:<category>`) is enabled. Tag only text the guard's block message fully covers. An
 unknown name or a misplaced tag injects nothing. `houseRules.subagents: false` skips SubagentStart.
 
-### Review enforcement is a two-hook state machine
+### Closing blocks are checked by hooks, defined in one place
 
-`review-arm.mjs` (UserPromptSubmit) writes a session marker only when the prompt literally invokes
-`/review` or `/stackmap:review`. `review-check.mjs` (Stop) blocks the turn unless the final message
-matches `reviewed at <sha>`, then clears the marker. It bails out on `stop_hook_active` and on
-markers older than 6 hours.
+`scripts/deliverables.mjs` owns every closing block (review, double-blind, audit report), the
+checks that name what a message is missing, and `ENFORCED_SKILLS`. The skill text and the check
+must change together. Hooks import it; no hook imports another hook.
+
+- `skill-arm.mjs` (UserPromptSubmit) writes `sessions/<id>.<skill>.json` only when the prompt
+  literally invokes a skill in `ENFORCED_SKILLS`. `skill-check.mjs` (Stop) blocks until the final
+  message satisfies every armed skill, clearing each marker as it is satisfied. Markers older than
+  6 hours or corrupt are cleared.
+- `audit-check.mjs` (SubagentStop, matcher `^stackmap:adversarial-auditor$`) blocks the auditor
+  until its report is complete. FALSIFIED and SURVIVED require PROVEN. Called for any other agent
+  type, it reports an error rather than passing.
+- On `stop_hook_active` neither blocks again: the turn or agent ends and a `systemMessage` names
+  what is still missing.
+
+### Agents audit `main` unless a ref is named
+
+Claude Code starts an `isolation: worktree` agent at the remote's default branch (e.g.
+`origin/main`), not local `main` or the current branch. Agents therefore check out explicitly: the
+ref the brief names, or `main`, and report `<ref>@<sha>`. When no ref is named and the current
+branch isn't `main`, the skills ask before dispatching. Don't make a skill or agent silently switch
+to the current branch.
 
 ### Three kinds of edge, never conflated
 
