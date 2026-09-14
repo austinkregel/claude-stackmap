@@ -1,11 +1,7 @@
 import { execSync } from "node:child_process";
 import { parseArgs } from "./args.mjs";
 
-/**
- * Poll a command until it succeeds or matches a pattern, in ONE agent turn.
- * The alternative is a `sleep N && <check>` loop re-issued once per turn, where every poll
- * costs a full round trip and the turns add up faster than the wait does.
- */
+/** Poll a command until it succeeds or matches a pattern, in one agent turn. */
 export async function wait(argv) {
   const { flags } = parseArgs(argv);
   const cmd = flags.cmd;
