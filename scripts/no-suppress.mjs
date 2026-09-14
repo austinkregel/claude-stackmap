@@ -1,10 +1,7 @@
 #!/usr/bin/env node
 /**
- * PreToolUse(Edit|Write|NotebookEdit): block edits that SILENCE a check instead of fixing it.
- *
- * Why: a suppressed lint, a skipped test, or a relaxed type check turns a real problem into a
- * green result. Dead code in particular should be deleted, not annotated to keep the tooling
- * quiet — it is tech debt and a liability. The catalog lives in suppression-rules.mjs.
+ * PreToolUse(Edit|Write|NotebookEdit): block edits that silence a check instead of fixing it.
+ * The catalog lives in suppression-rules.mjs.
  *
  * Only an edit that INTRODUCES a directive is blocked: per rule, the number of matches after the
  * edit must not exceed the number before it. Removing a directive, or editing around one that was
@@ -12,13 +9,13 @@
  *
  * Where "before" comes from:
  *   - Edit:         old_string → new_string.
- *   - Write:        the file currently on disk → the new content. Comparing against "" would
- *                   block every rewrite of a file that already carries a directive.
+ *   - Write:        the file currently on disk → the new content (not "", which would block every
+ *                   rewrite of a file that already carries a directive).
  *   - NotebookEdit: the existing cell's source → new_source. Rules come from the notebook's
  *                   declared language; when it declares none, the cell is checked against every
  *                   inline-code rule. Markdown cells are prose and pass.
  *
- * Fails CLOSED: an unreadable payload, invalid config, a file that exists but cannot be read, or a
+ * Fails closed: an unreadable payload, invalid config, a file that exists but cannot be read, or a
  * notebook cell that cannot be located blocks.
  */
 import { existsSync, readFileSync } from "node:fs";
