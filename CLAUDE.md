@@ -42,10 +42,10 @@ node scripts/hooks-test.mjs         # hook-open.sh, freshness, fetch sanity, con
 node scripts/skill-check-test.mjs   # /review and /double-blind closing blocks, arming, loop safety
 node scripts/audit-test.mjs         # the auditor's report check, Reproducers against transcript fixtures, lag retries
 node scripts/cli-test.mjs           # every sm subcommand through bin/sm: output, counts, --json, exit codes
-node scripts/config-test.mjs        # config resolution, validation, selectIndex, stack detection  (needs dist/)
-node scripts/extract-test.mjs       # PHP extractors + adapter wiring, inline fixtures  (needs dist/)
-node scripts/notes-test.mjs         # note store: supersession, retraction weighting, drift  (needs dist/)
-node scripts/smoke.mjs              # every MCP tool over stdio on a Laravel fixture, plus a no-config server  (needs dist/)
+node scripts/config-test.mjs        # config resolution, per-entry validation, scope, detection, roots, cache, addIndex  (needs dist/)
+node scripts/extract-test.mjs       # PHP extractors + adapter wiring, several roots, inline fixtures  (needs dist/)
+node scripts/notes-test.mjs         # note store: supersession, retraction weighting, drift, stamps across roots  (needs dist/)
+node scripts/smoke.mjs              # every MCP tool over stdio: scope, aliases, duplicates, add-index, plus a no-config server  (needs dist/)
 ```
 
 Every suite uses temporary config, state, notes, and fixtures (`$STACKMAP_CONFIG`, `$STACKMAP_STATE`,
@@ -61,7 +61,8 @@ After `npm run build`, run `/reload-plugins` in Claude Code to pick up the new `
 
 Resolution order, first hit wins: `$STACKMAP_CONFIG`, `$XDG_CONFIG_HOME/stackmap/config.json`,
 `~/.config/stackmap/config.json`. Copy `config.example.json` there; see the README for fields.
-Adding a repo is a config edit as long as its stack has an adapter.
+Adding a project is a config edit, or the `stackmap_add_index` tool, as long as its stack has an
+adapter.
 
 Notes live under `notesDir` (default `~/.config/stackmap/notes/`, one markdown file per note).
 Per-session hook state (`sessions/<id>.review.json`) lives in `~/.stackmap/`, or under
@@ -216,13 +217,67 @@ Declarations are parsed from every file matching `DECL_HINT`. `DECL_RE` is line-
 
 ### Stack adapters: the seam for new languages
 
-`src/adapters/types.ts` defines `StackAdapter` (`resolveSymbol`, `resolutionTable`, `stats`) and
-`AdapterFactory`. To add a stack, implement the interface and register the factory in `FACTORIES`
-in `src/adapters/registry.ts`, moving it out of `PLANNED`. Nothing in `config.ts`, `index.ts`, or
-the tool surface is PHP-specific — keep it that way.
+`src/adapters/types.ts` defines `StackAdapter` (`resolveSymbol`, `resolutionTable`, `stats`),
+`IndexedAdapter`, and `AdapterFactory` (`detect`, `create(cfg, roots, globalExclude)`).
+
+To add a stack:
+- implement the interface;
+- give the factory a `detect` that reads the root's own manifest;
+- register it in `FACTORIES` in `src/adapters/registry.ts`, moving it out of `PLANNED`.
+
+Detection is first match in `FACTORIES` order, then the `PLANNED` markers.
+
+**Capabilities are declared, never assumed.** An `IndexedAdapter` names every capability (today
+`resolve`), with `null` when the adapter lacks it. Tools get one through `requireCapability`, which
+fails naming the tool, the index, the adapter, and the capability. The config and the tool surface
+are stack-neutral. `index.ts`'s resolve and bindings descriptions, and its edge-count sum, are
+PHP-specific because Laravel is the only `resolve` provider; keep new tools stack-neutral.
 
 Laravel is the only implemented adapter. Edges are built in one pass and memoized per adapter
-instance; `clearAdapterCache()` (called by `stackmap_indexes`) clears them.
+instance. The registry cache is keyed by index name plus a fingerprint of the resolved config (roots'
+real paths and rules, adapter, include, exclude, options, globalExclude), so a config edit rebuilds on
+the next query. `clearAdapterCache()` (called by `stackmap_indexes`) also rebuilds, which is what
+re-reads changed source files.
+
+### Projects, roots, and scope
+
+An index entry is a **project**: its `root` (which owns the index) plus `aliases`, each an extra root
+`{ path, include?, exclude? }`.
+- `resolveRoots` resolves every root to a real path, and a missing, non-directory, or duplicated root
+  is an error.
+- Each file is indexed once, grouped under the innermost root containing it, with paths relative to
+  that root. Only that root's walk, under its own rules, indexes it, so a child root's rules win over
+  its parent's.
+- Groups are ordered aliases first, then the main root. A nested alias precedes the alias containing
+  it (deepest first), and siblings are in path order.
+- `FileRef`, `ResolutionEdge.root`, and `RootStats` carry the root. Never report a path without its
+  root.
+
+Config entries are validated one at a time (`parseConfig`):
+- An unknown key, any invalid field, or a root whose own (or inherited) `include` names a directory
+  its `exclude` rules out leaves only that entry out, recorded in `indexErrors`.
+- A contradiction with `globalExclude` or an adapter default is not a config error: the walker skips
+  the directory and the adapter warns.
+- A later entry reusing a name is ignored (the first wins) and reported in `stackmap_indexes` and in
+  every query's `caveats` (`duplicateCaveats`).
+- `addIndex` edits the file's JSON as written, because `guard` and `houseRules` aren't modelled
+  here. It refuses names used by any entry, valid or not.
+
+`scope` (a list of project names, `selectScope`) replaces `index` on every `stackmap_*` tool.
+- Omitted means `selectIndex`'s default.
+- `acrossScope` gives each project its own outcome, and a project that can't answer is an error
+  entry, never dropped.
+- `index.ts` rejects arguments a tool doesn't declare, and non-numeric `limit`/`offset`.
+
+`walkFiles` returns sorted files, and reports missing, unreadable, and excluded configured
+directories.
+- An exclude with a `/` is a root-relative path.
+- An exclude also applies to configured include directories. Config validation rejects an entry's
+  own contradictions, so the walker only sees ones from global or default excludes.
+
+Laravel reads `composer.json` per root:
+- a main root without one, or any root whose file can't be read, is an error for that root;
+- an alias without one is indexed with a warning.
 
 Report unknowns as unknown: a closure binding yields `concrete: null` plus a `note`; a PSR-4 path
 that isn't on disk yields `exists: false` with the candidate path.
@@ -246,8 +301,13 @@ index. Cache invalidation keys:
 The watcher is never the correctness boundary; keep the backstop. `store.write()` sets `dirty`
 itself. `scan()` must replace the `Note` object whenever its file changes, or `docCache` goes stale.
 
-Notes are stamped relative to the repo root of the index `selectIndex` picks for the call: the
-`repo` argument, else `defaultIndex`, else the only enabled index.
+Stamps and drift resolve against the roots of the project named in the note's own `repo` (else
+`defaultIndex`, else the only enabled project), looked up per note, never per query.
+- A `FileStamp` records its alias's configured path in `root`; absent means the main root, which is
+  how stamps written before roots existed read.
+- A relative path is stamped in the one root that holds it. In two roots it is an error. With no
+  resolvable project it is an error (absolute paths need none).
+- Drift reports `unresolved`, with a reason, when the project or alias can't be found.
 
 ### `sm` CLI: verified counts, not silent drops
 
