@@ -1,7 +1,6 @@
-# Shared node resolution, sourced by launch.sh and guard.sh.
-# VS Code launched from the Dock inherits a minimal PATH without version-manager shims,
-# and a shim is itself a script that fails to exec when its manager is off PATH — so every
-# candidate is verified by actually running it.
+# Shared node resolution, sourced by bin/sm, launch.sh, guard.sh, and hook-open.sh.
+# PATH may be minimal, and a version-manager shim fails when its manager is off PATH, so every
+# candidate is verified by running it, and real installs are tried before shims.
 usable() { [ -n "${1:-}" ] && [ -x "$1" ] && "$1" --version >/dev/null 2>&1; }
 
 find_node() {
