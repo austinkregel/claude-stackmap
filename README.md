@@ -16,7 +16,7 @@ A Claude Code plugin in five parts.
 
 | Stack | Detection | Resolution table | State |
 |---|---|---|---|
-| Laravel / PHP | `artisan` | container `bind`/`singleton`/`scoped`/`instance`, contextual `when`/`needs`/`give`, PHP `extends`/`implements` | **implemented** |
+| Laravel / PHP | `composer.json` `require` or `require-dev` lists `laravel/framework` or any `illuminate/*` package | container `bind`/`singleton`/`scoped`/`instance`, contextual `when`/`needs`/`give`, PHP `extends`/`implements` | **implemented** |
 | Phoenix / Elixir | `mix.exs` | behaviours + app config + supervision trees | detected, not implemented |
 | Node / TS | `package.json` | — | detected, not implemented |
 
@@ -75,35 +75,83 @@ Copy `config.example.json` to `~/.config/stackmap/config.json` and edit.
       "name": "my-app",
       "root": "~/src/my-app",
       "adapter": "laravel",
-      "include": ["app"]
+      "include": ["app"],
+      "aliases": [{ "path": "~/src/my-shared-package", "include": ["src"] }]
     }
   ]
 }
 ```
 
+Each entry in `indexes` is a **project**:
+
 | Field | Meaning |
 |---|---|
-| `name` | Handle passed as `index` in tool calls. |
-| `root` | Repo root. `~` is expanded. |
-| `adapter` | `auto` (detect from marker files), `laravel`, `phoenix`, `node`. Default `auto`. |
-| `include` | Directories scanned. Adapter default for Laravel is `["app"]`. |
-| `exclude` | Extra directory names to skip, merged with `globalExclude` and adapter defaults. |
+| `name` | Handle listed in `scope` in tool calls. Must be unique. |
+| `root` | The project's main root; it owns the index. `~` is expanded. |
+| `aliases` | Extra roots of the same project, each `{ "path", "include"?, "exclude"? }`. Every query searches every root. An alias without its own `include`/`exclude` inherits the project's. |
+| `adapter` | `auto` (detect from the root's package manifest), `laravel`, `phoenix`, `node`. Default `auto`. |
+| `include` | Directories scanned in each root. Laravel's default is `["app", "bootstrap", "config", "routes"]`. |
+| `exclude` | Extra directories to skip, merged with `globalExclude` and adapter defaults. A name skips that directory at any depth; a root-relative path containing `/` (like Laravel's default `bootstrap/cache`) skips that path. |
 | `options` | Per-adapter settings. Laravel accepts `bindingPaths` as an alias for `include`. |
 | `enabled` | Set `false` to keep an entry without loading it. |
-| `defaultIndex` | Index used when a tool call omits `index`. Required once you configure more than one. |
-| `globalExclude` | Directory names skipped in every index. |
+| `defaultIndex` | Project used when a tool call omits `scope`. Required once you configure more than one. |
+| `globalExclude` | Directory names skipped in every project. |
 | `notesDir` | Where notes are stored. Default `~/.config/stackmap/notes`. |
 
-Adding a repo is a config edit, as long as its stack has an adapter.
+Index entries are validated one at a time. An unknown or misspelled key, or any other invalid field,
+leaves that entry out and names the problem in `stackmap_indexes`; the other projects still load. If
+two entries share a name, the first is used, and every later one is reported in `stackmap_indexes`
+and in the `caveats` of every query.
+
+Add a project with the `stackmap_add_index` tool, or by editing the file, as long as its stack has an
+adapter.
+
+### Several roots in one project
+
+- **Each file is indexed once.** It is grouped under the innermost root that contains it, with paths
+  relative to that root, and real paths (symlinks resolved) decide what "the same file" is.
+- **A child root's rules win.** When an alias sits inside another root, the alias's `include` and
+  `exclude` decide which of its files are indexed. The parent's rules can't add or remove them.
+- **Group order.** Alias groups come first, then the main root. An alias nested inside another alias
+  comes before it (deepest first), and sibling aliases are in path order.
+- **Contradictory rules are config errors.** A root whose own `include` names a directory its own
+  `exclude` rules out invalidates that entry. An alias is checked against the lists it inherits.
+  Excluded by `globalExclude` or an adapter default instead: not scanned, and a warning says so.
+- **Laravel `composer.json` per root.**
+  - An alias with no `composer.json` is indexed anyway, with a warning, because it has no PSR-4 map.
+  - A main root with none, or any root whose `composer.json` can't be read, is an error for that root.
+- **Note stamps record their root.** A note's file stamps resolve against the roots of the project
+  named in the note's own `repo`.
+  - A relative path is stamped in the one root that has it. If it's in two roots, that's an error;
+    pass an absolute path to say which.
+  - A stamp in an alias records that alias. If the alias is later removed, drift reports the file as
+    `unresolved`, with the reason.
+  - `note_write` with relative files and no resolvable project is an error.
 
 ## Tools
 
+Every `stackmap_*` query takes `scope`: a list of project names, searched in order, each across all
+of its roots. When `scope` is omitted, the query uses `defaultIndex`, or the only enabled project.
+Each project answers on its own. A project that can't answer (an unreachable root, an adapter
+without the needed capability) appears as `{ index, error }`, and the others still answer. Arguments
+a tool doesn't declare are errors; the old `index` argument says it was replaced by `scope`.
+
 ### `stackmap_indexes`
-Lists configured indexes with detected stack and structure counts. Reports per-index errors
-(missing root, unimplemented adapter) without failing the whole call.
+Lists configured projects with their detected stack, their roots with per-root counts and warnings,
+and structure counts. Reports per-project errors (missing root, unimplemented adapter) without failing
+the whole call, and lists config entries that were not loaded under `notLoaded`.
+
+### `stackmap_add_index`
+`{ name, root, include?, exclude?, aliases? }` adds a project to the config file that is in use, or
+creates the first resolution candidate when none exists. The JSON is edited as written, so `guard`,
+`houseRules`, and every other entry are kept. It refuses:
+- a name any existing entry already uses;
+- an invalid entry;
+- a root or alias that isn't an existing directory.
 
 ### `stackmap_resolve`
-`{ symbol, index? }` → the symbol's file plus every edge, in six separate fields:
+`{ symbol, scope? }` → per project, `files` (every place the symbol's source may live, each with its
+`root`, root-relative `path`, and `exists`) plus every edge, in six separate fields:
 
 | Field | Source | Answers |
 |---|---|---|
@@ -121,8 +169,11 @@ caveats is not.**
 Reports `exists: false` when PSR-4 resolves a path that isn't on disk.
 
 ### `stackmap_bindings`
-`{ index?, kind?, filter?, limit?, offset? }` → the resolution table as
-`abstract → concrete → declaringFile:line`. `kind` selects what to return:
+`{ scope?, kind?, filter?, limit?, offset? }` → the resolution table as
+`abstract → concrete → root/declaringFile:line`, each edge tagged with its `index` (project) and
+`root`, joined across the projects in scope order. `limit` and `offset` page the joined list and must
+be numbers when given. `totalByIndex` and `matchedByIndex` count per project; `errors` lists projects
+that couldn't answer. `kind` selects what to return:
 
 | `kind` | Returns |
 |---|---|
@@ -349,8 +400,13 @@ when set (it must be absolute).
 - **PSR-4 only.** Classmap-autoloaded files resolve only if they also sit under a PSR-4 prefix.
 - **Static, not runtime.** Conditionally registered bindings are reported as declared, without
   evaluating the condition.
-- **Per-process memoization.** The adapter memoizes within a server process; restart or call
-  `stackmap_indexes` to rebuild.
+- **Per-process memoization.** The adapter memoizes within a server process. Changing a project's
+  config (roots, rules, adapter, options) rebuilds it on the next query. Changed source files are
+  not re-read until you restart or call `stackmap_indexes`.
+- **Excludes also apply to configured directories.** An `include` directory ruled out by
+  `globalExclude` or an adapter default exclude is not scanned, and a warning says so. The same
+  contradiction within one entry's own lists is a config error. Include directories that don't
+  exist, and ones that can't be read, are listed as warnings too.
 - **Guards see the command, not what it runs.** `eval` strings, aliases, shell functions, scripts
   on disk, and zsh-only syntax (glob qualifiers) are not followed. A program name or push refspec
   built at runtime is not checked.
@@ -374,10 +430,10 @@ npm run hooks-test         # hook-open.sh, freshness, fetch sanity, config.examp
 npm run skill-check-test   # closing blocks for /review and /double-blind
 npm run audit-test         # the auditor's report check
 npm run cli-test           # every sm subcommand: output, counts, --json, exit codes
-npm run config-test        # config resolution, validation, index selection, stack detection
-npm run extract-test       # PHP extractors + adapter wiring, on inline fixtures
-npm run notes-test         # note store
-npm run smoke              # every MCP tool over stdio on a Laravel fixture, including failure paths
+npm run config-test        # config resolution, per-entry validation, scope, detection, roots, caching, add-index
+npm run extract-test       # PHP extractors + adapter wiring, including several roots, on inline fixtures
+npm run notes-test         # note store, stamps across a project's roots
+npm run smoke              # every MCP tool over stdio on Laravel fixtures, including scope, aliases, and failure paths
 ```
 
 Every suite uses temporary config, state, and fixtures, so none needs or reads your own config.
@@ -387,8 +443,8 @@ Every suite uses temporary config, state, and fixtures, so none needs or reads y
 
 ```
 src/
-  config.ts            config schema, resolution, index selection
-  index.ts             MCP server — tool definitions and dispatch
+  config.ts            config schema (per-entry validation), resolution, project and scope selection, adding a project
+  index.ts             MCP server — tool definitions, argument checks, and dispatch
   notes/store.ts       note serialization, file stamping, drift, caching
   notes/search.ts      BM25 over an inverted index
   notes/tools.ts       note_* tool handlers
@@ -396,10 +452,11 @@ src/
   php/uses.ts          namespace + use-statement parsing, short-name expansion
   php/bindings.ts      container + contextual binding extraction
   php/declarations.ts  class/interface/trait/enum declarations and their extends/implements
-  adapters/types.ts    StackAdapter interface — the seam new stacks implement
-  adapters/laravel.ts  Laravel adapter
-  adapters/registry.ts stack detection and adapter caching
-  adapters/walk.ts     directory walker honouring excludes
+  adapters/types.ts    StackAdapter, IndexedAdapter capabilities, roots and file refs — the seam new stacks implement
+  adapters/laravel.ts  Laravel adapter, across a project's roots
+  adapters/registry.ts stack detection, root resolution, adapter caching, capability checks
+  adapters/scope.ts    runs a query across the projects in scope, one outcome each
+  adapters/walk.ts     directory walker honouring excludes, reporting what it couldn't walk
 scripts/
   hook-lib.mjs         hook wire protocol: deny, block, context, visible errors, state dir
   hook-config.mjs      the `guard` and `houseRules` config sections, strictly validated
