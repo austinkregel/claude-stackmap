@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 /**
- * Shell parser suite. Every guard's precision rests on this parser telling a command apart from a
- * description of one, so each construct is pinned both ways: what must be seen as a command, and
+ * Shell parser suite. Each construct is pinned both ways: what must be seen as a command, and
  * what must be seen as data.
  */
 import { commandName, commandWords, parse, ShellParseError, staticText, walkStages } from "./shell-tokens.mjs";
@@ -127,7 +126,6 @@ console.log("\n-- heredocs and here-strings --");
 }
 expectPipelines("pipe on the heredoc marker line is real", "cat <<'EOF' | tail -5\nbody\nEOF", [["cat", "tail"]]);
 {
-  // Regression: a pipeline after a heredoc reported the heredoc body as part of its source text.
   const script = parse("cat > p.py <<'PY'\nimport json\nPY\n# run it\npython3 p.py | head -5");
   const sources = script.pipelines.map((p) => p.source);
   check("pipeline source excludes a preceding heredoc body and comment", sources.at(-1) === "python3 p.py | head -5", `got ${JSON.stringify(sources)}`);
