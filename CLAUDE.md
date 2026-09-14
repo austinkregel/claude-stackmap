@@ -22,7 +22,7 @@ it must not catch. Every blind spot is reported as a count or a caveat.
 
 ```bash
 npm install
-npm run build          # tsc -> dist/  (required before the MCP server, extract-test, notes-test, smoke)
+npm run build          # tsc -> dist/  (required before the MCP server, config-test, extract-test, notes-test, smoke)
 npm run check          # typecheck only
 npm run watch          # tsc --watch
 npm test               # every suite below, in order
@@ -32,6 +32,7 @@ npm run bench          # note retrieval latency + rank quality
 Run a single suite directly — they are standalone scripts, and there is no test-name filter:
 
 ```bash
+node scripts/plugin-test.mjs        # hooks.json wiring, name agreement, closing-block drift, npm test coverage
 node scripts/shell-tokens-test.mjs  # shell parser the Bash guards evaluate (no build needed)
 node scripts/guard-test.mjs         # destructive commands, commit messages, guard.sh fail-closed paths
 node scripts/truncate-test.mjs      # no-truncate
@@ -40,16 +41,19 @@ node scripts/house-rules-test.mjs   # house rules: extend/replace/disable and ev
 node scripts/hooks-test.mjs         # hook-open.sh, freshness, fetch sanity, config.example.json
 node scripts/skill-check-test.mjs   # /review and /double-blind closing blocks, arming, loop safety
 node scripts/audit-test.mjs         # the adversarial auditor's report check
+node scripts/cli-test.mjs           # every sm subcommand through bin/sm: output, counts, --json, exit codes
+node scripts/config-test.mjs        # config resolution, validation, selectIndex, stack detection  (needs dist/)
 node scripts/extract-test.mjs       # PHP extractors + adapter wiring, inline fixtures  (needs dist/)
 node scripts/notes-test.mjs         # note store: supersession, retraction weighting, drift  (needs dist/)
-node scripts/smoke.mjs              # boots dist/index.js over stdio, exercises every tool + error paths
+node scripts/smoke.mjs              # every MCP tool over stdio on a Laravel fixture, plus a no-config server  (needs dist/)
 ```
 
-The hook suites set `$STACKMAP_CONFIG` and `$STACKMAP_STATE` to temp paths; keep it that way in any
-new hook test.
+Every suite uses temporary config, state, notes, and fixtures (`$STACKMAP_CONFIG`, `$STACKMAP_STATE`,
+`HOME`); keep it that way in any new test, so none reads your real config.
 
 Each suite prints `PASS`/`FAIL` per check and exits non-zero if any failed; add a `check(...)` call
-to extend one. `smoke` asserts against your real config, so it needs at least one working index.
+to extend one. A new `*-test.mjs` needs an npm script in the `test` chain; `plugin-test` fails
+otherwise.
 
 After `npm run build`, run `/reload-plugins` in Claude Code to pick up the new `dist/`.
 
@@ -230,6 +234,9 @@ Notes are stamped relative to the repo root of the index `selectIndex` picks for
 
 ### `sm` CLI: verified counts, not silent drops
 
-Every command reports read / matched / skipped / error counts; `sm slice` prints totals and exits 3
-on a short read. When adding a subcommand, register it in `COMMANDS` and `USAGE` in
-`scripts/cli/main.mjs`, share flag parsing via `scripts/cli/args.mjs`, and support `--json`.
+Every command reports read / matched / skipped / error counts and supports `--json`. Exit 3 means
+the result is incomplete (unparseable lines, ragged rows, duplicates found, a `--lines`/`--bytes`
+range past EOF); exit 1 means bad input or an unreadable path. Numeric flags go through
+`numberFlag`, so a typo is an error rather than a disabled limit. When adding a subcommand, register
+it in `COMMANDS` and `USAGE` in `scripts/cli/main.mjs`, share flag parsing via
+`scripts/cli/args.mjs`, and cover it in `cli-test.mjs`.
