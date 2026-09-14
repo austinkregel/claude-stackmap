@@ -1,17 +1,14 @@
 /**
  * The hooks' view of the stackmap config: the `guard` and `houseRules` sections.
  *
- * Parsed here, dependency-free, rather than imported from dist/, so a broken TypeScript build
- * cannot disable a guardrail. The TypeScript schema in src/config.ts does not model these two
- * sections; this file is their only owner.
+ * Dependency-free and not imported from dist/, so a broken TypeScript build cannot disable a
+ * guardrail. src/config.ts does not model these two sections; this file is their only owner.
  *
  * Resolution order matches src/config.ts, first hit wins:
  *   $STACKMAP_CONFIG, $XDG_CONFIG_HOME/stackmap/config.json, ~/.config/stackmap/config.json
  *
- * Validation is strict. Invalid JSON, a wrong type, or an unknown key throws `ConfigError` naming
- * the file and every issue. The previous guard fell back to defaults on unreadable config, which
- * meant a typo like `"alowMerge"` silently did nothing. Guardrails turn a ConfigError into a
- * block; informational hooks turn it into a visible error.
+ * Validation is strict: invalid JSON, a wrong type, or an unknown key throws `ConfigError` naming
+ * the file and every issue, never a fallback to defaults.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
