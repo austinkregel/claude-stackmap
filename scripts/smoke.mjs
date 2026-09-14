@@ -2,7 +2,8 @@
 /**
  * End-to-end suite: starts the built server over stdio against Laravel fixtures and a temporary
  * config, and calls every tool, checking what comes back, including the failure paths: a project
- * with an alias root, a query scoped to two projects, a duplicate project name, and adding a project.
+ * with an alias root, a query scoped to two projects, a duplicate project name, adding a project,
+ * typed notes, and a notes directory changed mid-session.
  * A second server runs with no config at all. Needs `npm run build`; never reads the real config or
  * notes.
  */
@@ -101,7 +102,7 @@ try {
   const { client, call } = await connect({ STACKMAP_CONFIG: configPath });
   try {
     const names = (await client.listTools()).tools.map((t) => t.name).sort().join();
-    check("lists all eight tools", names === "note_get,note_search,note_supersede,note_write,stackmap_add_index,stackmap_bindings,stackmap_indexes,stackmap_resolve", names);
+    check("lists all ten tools", names === "note_get,note_query,note_schemas,note_search,note_supersede,note_write,stackmap_add_index,stackmap_bindings,stackmap_indexes,stackmap_resolve", names);
 
     console.log("\n-- stackmap_indexes --");
     let r = await call("stackmap_indexes");
@@ -194,6 +195,38 @@ try {
     check("an invalid status is an error", r.isError, r.show);
     r = await call("note_supersede", { old_id: "nope", new_id: "also-nope" });
     check("superseding unknown ids is an error", r.isError, r.show);
+
+    console.log("\n-- typed notes --");
+    r = await call("note_schemas");
+    check("note_schemas lists the three shipped schemas with their JSON Schema", r.body?.schemas?.map((s) => s.name).join() === "struct_field_list,offset_table,algorithm_params" && r.body.schemas.every((s) => s.jsonSchema?.type === "object"), r.show);
+    const layout = { name: "Header", size: 8, align: 4, fields: [{ name: "magic", offset: 0, size: 4, type: "u32" }, { name: "flags", offset: 4, size: 4, type: "uint32_t" }] };
+    r = await call("note_write", { title: "Header layout", body: "The save header.", schema: "struct_field_list", data: layout, repo: "fixture", verified_on: "2026-09-14" });
+    check("note_write stores a typed record beside the note", r.body?.written === "header-layout" && r.body?.schema === "struct_field_list" && r.body?.schemaVersion === 1 && JSON.parse(readFileSync(r.body.dataPath, "utf8")).data.fields.length === 2, r.show);
+    r = await call("note_query", { schema: "struct_field_list", filter: { operator: "and", conditions: [{ parameter: "fields[].type", comparator: "STARTS_WITH", value: "UINT" }] } });
+    check("note_query finds it by any element, case-insensitively, with its data as stored", r.body?.matched === 1 && JSON.stringify(r.body.records[0].data) === JSON.stringify(layout) && r.body.invalid?.length === 0 && r.body.malformedFiles?.length === 0, r.show);
+    r = await call("note_search", { query: "u32" });
+    check("note_search finds a typed note by a short data value and names its schema", r.body?.results?.[0]?.id === "header-layout" && r.body.results[0].schema === "struct_field_list", r.show);
+    r = await call("note_write", { title: "Header layout", body: "x", schema: "offset_table", data: { subject: "s", base: "b", entries: [{ name: "n", offset: "0x0" }] } });
+    check("rewriting a typed note under another schema is an error", r.isError && /changing it to offset_table is not allowed/.test(r.text), r.show);
+    r = await call("note_write", { title: "Bad", body: "x", schema: "offset_table", data: { subject: "s", base: "b", entries: [{ name: "n", offset: "16" }] } });
+    check("invalid data is an error naming the issue", r.isError && /entries\.0\.offset: must be a hex string/.test(r.text), r.show);
+    r = await call("note_write", { title: "Bad", body: "x", schema: "no_such_schema", data: {} });
+    check("the schema argument is checked against the shipped names", r.isError && /no_such_schema/.test(r.text), r.show);
+    r = await call("note_query", { schema: "struct_field_list", filter: { operator: "and", conditions: [{ parameter: "fields[].typo", comparator: "EQUAL", value: "x" }] } });
+    check("note_query rejects a parameter the schema doesn't have", r.isError && /no field "typo"/.test(r.text), r.show);
+    r = await call("note_query", { schema: "struct_field_list", limit: "all" });
+    check("note_query rejects a non-numeric limit", r.isError && /'limit' must be a number/.test(r.text), r.show);
+    r = await call("note_write", { id: "../outside", title: "x", body: "y" });
+    check("a note id that leaves the notes directory is an error", r.isError && /is not allowed/.test(r.text), r.show);
+
+    console.log("\n-- notesDir change --");
+    const movedNotes = join(sandbox, "notes-moved");
+    writeFileSync(configPath, JSON.stringify({ ...JSON.parse(readFileSync(configPath, "utf8")), notesDir: movedNotes }));
+    r = await call("note_search", { query: "header" });
+    check("a changed notesDir is served by a new store on the next call", r.body?.notesDir === movedNotes && r.body?.total === 0, r.show);
+    writeFileSync(configPath, JSON.stringify({ ...JSON.parse(readFileSync(configPath, "utf8")), notesDir: config.notesDir }));
+    r = await call("note_search", { query: "header" });
+    check("…and changing it back serves the original notes", r.body?.notesDir === config.notesDir && r.body?.results?.[0]?.id === "header-layout", r.show);
 
     console.log("\n-- stackmap_add_index --");
     r = await call("stackmap_add_index", { name: "added", root: otherRepo });
