@@ -194,11 +194,7 @@ class LaravelAdapter implements StackAdapter {
     };
   }
 
-  /**
-   * The caveats exist so an empty result can never be read as a negative answer. The failure
-   * they prevent: a `foreach` over a class const bound 14 filter singletons through a computed
-   * key, the site was dropped silently, and `implementedBy: []` looked like "nothing binds this".
-   */
+  /** Caveats that keep an empty result from being read as a negative answer. */
   private caveatsFor(built: Built, abstractSideEmpty: boolean): string[] {
     const out: string[] = [];
     if (built.computedSites.length > 0) {
