@@ -62,15 +62,18 @@ No agent sees another's brief, findings, or existence. Every agent has full acce
 ## 6. Adversarial audit (always)
 
 Dispatch `stackmap:adversarial-auditor` with the leading answer as the claim, the evidence behind
-it, and the same ref. Its verdict is FALSIFIED, SURVIVED, or UNTESTED. If FALSIFIED, go back to
-step 5 with its counter-evidence.
+it, and the same ref. Its verdict is FALSIFIED, SURVIVED, or UNTESTED. A FALSIFIED or SURVIVED
+verdict comes with at least one Reproducer (a command, what was expected, the lines it actually
+printed), checked against the auditor's own transcript. If FALSIFIED, go back to step 5 with its
+counter-evidence.
 
 ## 7. Report
 
 1. The answer and its grade. If nothing reached PROVEN, say so in the first line.
 2. How each agent got there: method and evidence, not just the conclusion.
 3. Where they diverged, and which evidence settled it.
-4. What the auditor tried, and its verdict.
+4. What the auditor tried, and its verdict, attributed to its reproducer: the command and the
+   actual output lines. For an UNTESTED verdict, what the auditor needed instead.
 5. What remains unverified.
 
 Close with:
