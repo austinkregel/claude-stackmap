@@ -1,13 +1,9 @@
 #!/usr/bin/env node
 /**
- * UserPromptSubmit hook: arm review enforcement when the review skill is invoked.
+ * UserPromptSubmit hook: arm review enforcement when the prompt explicitly invokes the review skill.
+ * Arming only on explicit invocation, never on output text, keeps it from firing on ordinary work.
  *
- * Arming on an explicit invocation (rather than guessing from output text) is what keeps this
- * precise. The guard fires only for turns the user actually asked to be reviews, so it cannot
- * misfire on ordinary work — the same precision lesson as excluding `git merge-base`.
- *
- * Informational: a failure to arm must never block a prompt, but it is reported visibly rather
- * than swallowed, because an unarmed review looks identical to an armed one until it ends.
+ * Fails open, visibly: a failure to arm never blocks a prompt, but it is reported.
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
