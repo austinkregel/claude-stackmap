@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { parseArgs, buildPredicate, project, report } from "./args.mjs";
+import { parseArgs, buildPredicate, project, report, numberFlag } from "./args.mjs";
 
 /** RFC4180-ish parser: handles quoted fields, embedded delimiters, escaped quotes, CRLF. */
 export function parseCsv(text, delim = ",") {
@@ -29,7 +29,7 @@ export async function csv(argv) {
   if (positionals.length === 0) throw new Error("usage: sm csv <file...> [--where k=v] [--select a,b] [--count]");
   const delim = flags.delim && flags.delim !== true ? String(flags.delim) : ",";
   const pred = buildPredicate(flags.where);
-  const limit = flags.limit ? Number(flags.limit) : Infinity;
+  const limit = numberFlag(flags, "limit", { integer: true }) ?? Infinity;
   const asJson = Boolean(flags.json);
   const stats = { files: 0, dataRows: 0, matched: 0, ragged: 0, emitted: 0 };
   const out = [];
