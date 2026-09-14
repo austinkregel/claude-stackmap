@@ -114,8 +114,11 @@ if (auditorFile) {
   const fm = frontmatter(md);
   check("the auditor runs in its own worktree", fm.isolation === "worktree", JSON.stringify(fm));
   check("the auditor has a description", (fm.description ?? "").length > 20, JSON.stringify(fm));
-  check("the auditor's report block matches AUDIT_BLOCK", fencedLabels(md).join() === labels(AUDIT_BLOCK).join(), `${fencedLabels(md)} vs ${labels(AUDIT_BLOCK)}`);
+  // Exact text, not just labels: the Reproducer sub-fields' indentation is part of what the hook parses.
+  const fenced = [...md.matchAll(/^```[^\n]*\n([\s\S]*?)^```/gm)].map((m) => m[1].replace(/\n$/, ""));
+  check("the auditor's report block is exactly AUDIT_BLOCK", fenced.includes(AUDIT_BLOCK.join("\n")), `fenced blocks:\n${fenced.join("\n---\n")}`);
 }
+check("agent-transcript.mjs is a library, not a hook (never reads a payload)", !IMPORTS_READ_PAYLOAD.test(read("scripts/agent-transcript.mjs")) && !/readPayload/.test(read("scripts/agent-transcript.mjs")));
 
 const skillDirs = readdirSync(join(root, "skills")).filter((d) => existsSync(join(root, "skills", d, "SKILL.md")));
 for (const skill of ENFORCED_SKILLS) {
