@@ -40,7 +40,7 @@ node scripts/suppress-test.mjs      # no-suppress + suppression catalog integrit
 node scripts/house-rules-test.mjs   # house rules: extend/replace/disable and every failure path
 node scripts/hooks-test.mjs         # hook-open.sh, freshness, fetch sanity, config.example.json
 node scripts/skill-check-test.mjs   # /review and /double-blind closing blocks, arming, loop safety
-node scripts/audit-test.mjs         # the adversarial auditor's report check
+node scripts/audit-test.mjs         # the auditor's report check, Reproducers against transcript fixtures, lag retries
 node scripts/cli-test.mjs           # every sm subcommand through bin/sm: output, counts, --json, exit codes
 node scripts/config-test.mjs        # config resolution, validation, selectIndex, stack detection  (needs dist/)
 node scripts/extract-test.mjs       # PHP extractors + adapter wiring, inline fixtures  (needs dist/)
@@ -143,12 +143,29 @@ checks that name what a message is missing, and `ENFORCED_SKILLS`. The skill tex
 must change together. Hooks import it; no hook imports another hook.
 
 - `skill-arm.mjs` (UserPromptSubmit) writes `sessions/<id>.<skill>.json` only when the prompt
-  literally invokes a skill in `ENFORCED_SKILLS`. `skill-check.mjs` (Stop) blocks until the final
-  message satisfies every armed skill, clearing each marker as it is satisfied. Markers older than
-  6 hours or corrupt are cleared.
+  literally invokes a skill in `ENFORCED_SKILLS`. Background-task notifications also arrive as
+  prompts (a `<task-notification>` envelope carrying an agent's output); `isTaskNotification`
+  excludes them, since the payload has no other marker of origin. `skill-check.mjs` (Stop) blocks
+  until the final message satisfies every armed skill, clearing each marker as it is satisfied.
+  Markers older than 6 hours or corrupt are cleared.
 - `audit-check.mjs` (SubagentStop, matcher `^stackmap:adversarial-auditor$`) blocks the auditor
-  until its report is complete. FALSIFIED and SURVIVED require PROVEN. Called for any other agent
-  type, it reports an error rather than passing.
+  until its report is complete. FALSIFIED and SURVIVED require PROVEN and at least one Reproducer.
+  Called for any other agent type, it reports an error rather than passing.
+  - Each Reproducer after the last `Claim:` is checked against the auditor's own transcript:
+    `sameShellCommand` compares the command via `shell-tokens.mjs`, and `Actual` must be an exact run
+    of output lines (`verifyReproducers`).
+  - Two outcomes, never mixed. What the auditor can fix blocks. What it can't is surfaced to the user
+    in a `systemMessage` with the report, never blocked: a missing or unreadable transcript, an
+    unparseable command, `Actual` in an excerpt's cut, a result unwritten after the lag window.
+  - Reproducers on UNTESTED are not verified. The hook's 60 s timeout covers the 50 s lag window.
+- `scripts/agent-transcript.mjs` reads subagent transcripts. It is a library, not a hook: it never
+  reads a payload, and plugin-test asserts that.
+  - The record shapes and the `<persisted-output>` and error-excerpt formats come from captures of
+    Claude Code 2.1.231. The saved-output file name is parsed from the content, never derived from
+    the tool_use id.
+  - Anything unexpected is a `TranscriptError`, not a partial read.
+- The auditor's report block in `agents/adversarial-auditor.md` must equal `AUDIT_BLOCK` exactly;
+  plugin-test compares the text, not just labels.
 - On `stop_hook_active` neither blocks again: the turn or agent ends and a `systemMessage` names
   what is still missing.
 
