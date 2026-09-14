@@ -224,7 +224,8 @@ function positive(c: Condition, values: unknown[]): boolean {
       return values.some((v) => str(v) && c.regex!.test(v));
     case "EXISTS":
     case "MISSING":
-      return values.length > 0;
+      // A key present with a null value counts as missing.
+      return values.some((v) => v !== null);
     case "LESS_THAN":
       return values.some((v) => compare(v, c.value) !== null && compare(v, c.value)! < 0);
     case "LESS_THAN_EQUAL":
