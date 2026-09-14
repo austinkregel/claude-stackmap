@@ -26,6 +26,11 @@ export function noteWrite(store: NoteStore, args: any, stampRoots: RootsLookup) 
   if (args.verified_on !== undefined && (typeof args.verified_on !== "string" || !ISO.test(args.verified_on) || Number.isNaN(Date.parse(args.verified_on)))) {
     throw new Error(`note_write: 'verified_on' must be an ISO 8601 date or date-time, got ${JSON.stringify(args.verified_on)}.`);
   }
+  if (args.files !== undefined) {
+    if (!Array.isArray(args.files)) throw new Error(`note_write: 'files' must be a list of paths, got ${JSON.stringify(args.files)}.`);
+    const bad = args.files.map((f: unknown, i: number) => (typeof f === "string" && f.trim() ? null : `files[${i}] = ${JSON.stringify(f)}`)).filter(Boolean);
+    if (bad.length) throw new Error(`note_write: every entry in 'files' must be a non-empty path string; ${bad.join(", ")}. Nothing was written.`);
+  }
   if ((args.schema === undefined) !== (args.data === undefined)) {
     throw new Error("note_write: 'schema' and 'data' go together — pass both for a typed note, or neither.");
   }
@@ -46,7 +51,7 @@ export function noteWrite(store: NoteStore, args: any, stampRoots: RootsLookup) 
   const unknown = supersedes.filter((old) => old !== id && !store.exists(checkId(old)));
   if (unknown.length) throw new Error(`note_write: 'supersedes' names note(s) that don't exist: ${unknown.join(", ")}; nothing was written.`);
 
-  const files = Array.isArray(args.files) ? args.files.filter((f: unknown) => typeof f === "string") : [];
+  const files: string[] = args.files ?? [];
   const note: Note = {
     id,
     title: args.title.trim(),
