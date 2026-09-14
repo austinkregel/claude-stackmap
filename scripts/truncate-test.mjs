@@ -1,8 +1,6 @@
 #!/usr/bin/env node
 /**
- * Regression suite for no-truncate.mjs. The first block matters most: a guardrail that fires on
- * ordinary work gets switched off, so every allowance the rule promises is pinned here, next to
- * the four evasions the regex-based predecessor let through.
+ * Suite for no-truncate.mjs: every allowance the rule promises, then every form it must block.
  */
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -68,7 +66,7 @@ try {
   check("real pipe after a quoted decoy", BLOCK, bash('echo "a | tail b" | tail -3'));
   check("violation on a heredoc marker line", BLOCK, bash("cat <<'EOF' | tail -5\nbody\nEOF"));
 
-  console.log("\n-- blocked: evasions the regex-based predecessor let through --");
+  console.log("\n-- blocked: a filter before tee, |&, and substitutions --");
   check("truncating BEFORE tee", BLOCK, bash("npm test | tail -5 | tee /tmp/x"));
   check("bash |& pipe", BLOCK, bash("npm test |& tail -5"));
   check("command substitution inside double quotes", BLOCK, bash('echo "$(npm test | tail -5)"'));
