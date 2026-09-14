@@ -200,7 +200,8 @@ index. Cache invalidation keys:
 The watcher is never the correctness boundary; keep the backstop. `store.write()` sets `dirty`
 itself. `scan()` must replace the `Note` object whenever its file changes, or `docCache` goes stale.
 
-Notes are stamped relative to the default index's repo root.
+Notes are stamped relative to the repo root of the index `selectIndex` picks for the call: the
+`repo` argument, else `defaultIndex`, else the only enabled index.
 
 ### `sm` CLI: verified counts, not silent drops
 
