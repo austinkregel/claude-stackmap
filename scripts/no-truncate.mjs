@@ -1,10 +1,7 @@
 #!/usr/bin/env node
 /**
- * PreToolUse(Bash): block feeding a live command's output into a truncating filter.
- *
- * Why: a truncated pipe hides errors and context, and the command often cannot simply be re-run —
- * not every command is idempotent, and assuming it is can do real damage. The rule is to capture
- * the full output with `tee` first, so it can be read afterwards without running anything again.
+ * PreToolUse(Bash): block feeding a live command's output into a truncating filter, unless `tee`
+ * captures the full output first.
  *
  * The rule, precisely:
  *   - In a pipeline, if any stage after the first is a truncating filter (configurable,
@@ -18,7 +15,7 @@
  *
  * `wc`, `sort`, and `jq` are not truncating filters by default; they transform or summarise output.
  *
- * Fails CLOSED: an unreadable payload, invalid config, a command the shell would reject, or a
+ * Fails closed: an unreadable payload, invalid config, a command the shell would reject, or a
  * filter whose name is only known at runtime (`cmd | $PAGER`) blocks.
  *
  * Stated limits: pipelines inside `eval` strings, aliases, shell functions, and scripts on disk
@@ -34,8 +31,8 @@ class CannotEvaluate extends Error {}
 
 /**
  * Names of truncating programs a stage runs: itself, or (for a subshell) anything inside it. A
- * subshell consumer is not analysed for which inner command reads the pipe, so
- * `cmd | (cd x && grep y file)` blocks; over-blocking a rare form is the safe direction.
+ * subshell is not analysed for which inner command reads the pipe, so `cmd | (cd x && grep y file)`
+ * deliberately blocks.
  */
 function truncatorsIn(stage, consumers) {
   const found = [];
@@ -51,10 +48,7 @@ function truncatorsIn(stage, consumers) {
   return found;
 }
 
-/**
- * The pipeline as a one-line label for the block message: each stage's first line, joined by its
- * pipe operator. A multi-line `python -c '…' | head` would otherwise fill the reason with code.
- */
+/** The pipeline as a one-line label for the block message: each stage's first line, joined by its pipe operator. */
 const firstLine = (stage) => {
   const [line, ...rest] = stage.source.split("\n");
   return rest.length ? `${line.trim()} …` : line.trim();
