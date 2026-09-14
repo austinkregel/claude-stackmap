@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { checkId, NoteStore, type Note, type RootsLookup, type TypedRecord } from "./store.js";
+import { checkId, NoteStore, type Note, type NoteStatus, type TypedRecord } from "./store.js";
 import { scoreNotes, type RootsFor } from "./search.js";
 import { checkRecord, NOTE_SCHEMAS, noteSchema, schemaJson, validateForWrite } from "./schemas.js";
 import { matches, parseFilter } from "./query.js";
-import { countArg } from "../args.js";
+import { booleanArg, countArg, show, stringArg, stringListArg } from "../args.js";
+
+const STATUSES: NoteStatus[] = ["current", "superseded", "retracted"];
 
 function slug(title: string): string {
   const base = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
@@ -16,54 +18,59 @@ function driftCaveat(changed: number): string | null {
   return changed ? `This conclusion predates ${changed} change(s) to the file(s) it describes, or they can't be checked. Re-verify before relying on it.` : null;
 }
 
-export function noteWrite(store: NoteStore, args: any, stampRoots: RootsLookup) {
-  if (typeof args.title !== "string" || !args.title.trim()) throw new Error("note_write requires 'title'.");
-  if (typeof args.body !== "string" || !args.body.trim()) throw new Error("note_write requires 'body'.");
-  const status = args.status ?? "current";
-  if (!["current", "superseded", "retracted"].includes(status)) {
-    throw new Error(`note_write: status must be current|superseded|retracted, got "${status}".`);
+/** Stamps a note's files against the roots of the project its (validated) `repo` names. */
+export function noteWrite(store: NoteStore, args: any, rootsFor: RootsFor) {
+  const T = "note_write";
+  const title = stringArg(T, "title", args.title);
+  const body = stringArg(T, "body", args.body);
+  if (title === undefined) throw new Error("note_write requires 'title'.");
+  if (body === undefined) throw new Error("note_write requires 'body'.");
+  const status = stringArg(T, "status", args.status) ?? "current";
+  if (!STATUSES.includes(status as NoteStatus)) {
+    throw new Error(`note_write: 'status' must be ${STATUSES.join("|")}, got ${show(status)}.`);
   }
-  if (args.verified_on !== undefined && (typeof args.verified_on !== "string" || !ISO.test(args.verified_on) || Number.isNaN(Date.parse(args.verified_on)))) {
-    throw new Error(`note_write: 'verified_on' must be an ISO 8601 date or date-time, got ${JSON.stringify(args.verified_on)}.`);
+  const verifiedOn: string | undefined = args.verified_on;
+  if (verifiedOn !== undefined && (typeof verifiedOn !== "string" || !ISO.test(verifiedOn) || Number.isNaN(Date.parse(verifiedOn)))) {
+    throw new Error(`note_write: 'verified_on' must be an ISO 8601 date or date-time, got ${show(verifiedOn)}.`);
   }
-  if (args.files !== undefined) {
-    if (!Array.isArray(args.files)) throw new Error(`note_write: 'files' must be a list of paths, got ${JSON.stringify(args.files)}.`);
-    const bad = args.files.map((f: unknown, i: number) => (typeof f === "string" && f.trim() ? null : `files[${i}] = ${JSON.stringify(f)}`)).filter(Boolean);
-    if (bad.length) throw new Error(`note_write: every entry in 'files' must be a non-empty path string; ${bad.join(", ")}. Nothing was written.`);
-  }
-  if ((args.schema === undefined) !== (args.data === undefined)) {
+  const files = stringListArg(T, "files", args.files);
+  const tags = stringListArg(T, "tags", args.tags);
+  const supersedesArg = stringListArg(T, "supersedes", args.supersedes);
+  const repoArg = stringArg(T, "repo", args.repo);
+  const idArg = stringArg(T, "id", args.id);
+  const schemaArg = stringArg(T, "schema", args.schema);
+  if ((schemaArg === undefined) !== (args.data === undefined)) {
     throw new Error("note_write: 'schema' and 'data' go together — pass both for a typed note, or neither.");
   }
-  const id = checkId(typeof args.id === "string" && args.id.trim() ? args.id.trim() : slug(args.title));
+  const id = checkId(idArg !== undefined ? idArg.trim() : slug(title));
   const existing = store.get(id);
 
   let record: TypedRecord | null = existing?.record ?? null;
-  if (args.schema !== undefined) {
-    if (typeof args.schema !== "string") throw new Error("note_write: 'schema' must be a schema name.");
-    const schema = validateForWrite(args.schema, args.data);
+  if (schemaArg !== undefined) {
+    const schema = validateForWrite(schemaArg, args.data);
     if (existing?.record && existing.record.schema !== schema.name) {
       throw new Error(`note_write: note "${id}" is a ${existing.record.schema} record; changing it to ${schema.name} is not allowed. Write a new note and supersede this one.`);
     }
     record = { schema: schema.name, version: schema.version, data: args.data };
   }
 
-  const supersedes: string[] = Array.isArray(args.supersedes) ? args.supersedes.map(String) : (existing?.supersedes ?? []);
+  const supersedes = supersedesArg ?? existing?.supersedes ?? [];
   const unknown = supersedes.filter((old) => old !== id && !store.exists(checkId(old)));
   if (unknown.length) throw new Error(`note_write: 'supersedes' names note(s) that don't exist: ${unknown.join(", ")}; nothing was written.`);
 
-  const files: string[] = args.files ?? [];
+  const repo = repoArg ?? existing?.repo ?? null;
   const note: Note = {
     id,
-    title: args.title.trim(),
-    status,
+    title: title.trim(),
+    status: status as NoteStatus,
     created: existing?.created ?? new Date().toISOString(),
-    verifiedOn: args.verified_on ?? new Date().toISOString(),
-    tags: Array.isArray(args.tags) ? args.tags.map(String) : (existing?.tags ?? []),
-    repo: args.repo ?? existing?.repo ?? null,
+    verifiedOn: verifiedOn ?? new Date().toISOString(),
+    tags: tags ?? existing?.tags ?? [],
+    repo,
     supersedes,
     supersededBy: existing?.supersededBy ?? [],
-    files: files.length ? store.stamp(files, stampRoots) : (existing?.files ?? []),
-    body: args.body.trim(),
+    files: files?.length ? store.stamp(files, rootsFor(repo)) : (existing?.files ?? []),
+    body: body.trim(),
     record,
   };
   store.write(note);
@@ -86,10 +93,11 @@ export function noteWrite(store: NoteStore, args: any, stampRoots: RootsLookup) 
 }
 
 export function noteSearch(store: NoteStore, args: any, rootsFor: RootsFor) {
-  const limit = countArg("note_search", "limit", args.limit, 10, 1);
-  const scored = scoreNotes(store, String(args.query ?? ""), rootsFor, {
-    includeRetracted: Boolean(args.include_retracted),
-    repo: args.repo ?? null,
+  const T = "note_search";
+  const limit = countArg(T, "limit", args.limit, 10, 1);
+  const scored = scoreNotes(store, stringArg(T, "query", args.query, { allowBlank: true }) ?? "", rootsFor, {
+    includeRetracted: booleanArg(T, "include_retracted", args.include_retracted, false),
+    repo: stringArg(T, "repo", args.repo) ?? null,
   });
   const malformed = store.malformed();
   return {
@@ -142,19 +150,22 @@ export function noteSupersede(store: NoteStore, args: any) {
  * longer validate, and files that can't be read as notes, are listed separately, never dropped.
  */
 export function noteQuery(store: NoteStore, args: any, rootsFor: RootsFor) {
-  if (typeof args.schema !== "string") throw new Error("note_query requires 'schema'.");
-  const schema = noteSchema(args.schema);
+  const T = "note_query";
+  const schemaName = stringArg(T, "schema", args.schema);
+  if (schemaName === undefined) throw new Error("note_query requires 'schema'.");
+  const schema = noteSchema(schemaName);
   const filter = parseFilter(args.filter, schemaJson(schema));
-  const limit = countArg("note_query", "limit", args.limit, 100, 1);
-  const offset = countArg("note_query", "offset", args.offset, 0, 0);
-  const includeRetracted = Boolean(args.include_retracted);
+  const limit = countArg(T, "limit", args.limit, 100, 1);
+  const offset = countArg(T, "offset", args.offset, 0, 0);
+  const includeRetracted = booleanArg(T, "include_retracted", args.include_retracted, false);
+  const repo = stringArg(T, "repo", args.repo);
 
   const invalid: Array<{ id: string; schema: string; version: number; reason: string; message: string; issues: Array<{ path: string; message: string }> }> = [];
   const hits: Note[] = [];
   let excludedRetracted = 0;
   for (const note of store.list()) {
     if (!note.record) continue;
-    if (args.repo && note.repo && note.repo !== args.repo) continue;
+    if (repo && note.repo && note.repo !== repo) continue;
     const check = checkRecord(note.record.schema, note.record.version, note.record.data);
     if (note.record.schema !== schema.name) {
       if (!check.valid && check.reason === "unknown-schema") invalid.push({ id: note.id, schema: note.record.schema, version: note.record.version, reason: check.reason, message: check.message, issues: check.issues });
