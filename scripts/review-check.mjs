@@ -1,14 +1,9 @@
 #!/usr/bin/env node
 /**
- * Stop hook: a review turn may not end without a SHA-stamped, falsifiable claim.
+ * Stop hook: a review turn may not end without a SHA-stamped, falsifiable claim. Fires only for
+ * turns armed by review-arm.mjs.
  *
- * A review that never prints the sha it read cannot be checked afterwards, and reviewing a
- * stale cached branch looks identical to reviewing the right one. Guidance in a skill is
- * advisory; this makes it a precondition for ending the turn. Fires only for turns armed by
- * review-arm.mjs.
- *
- * Runs through hook-open.sh and fails OPEN on internal errors, visibly: a Stop hook that throws
- * must never trap the session. The escape valves below are each pinned by review-test.mjs.
+ * Fails open, visibly, on internal errors: a Stop hook that throws must never trap the session.
  */
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
