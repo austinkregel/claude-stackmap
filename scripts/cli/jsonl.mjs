@@ -41,7 +41,7 @@ export async function jsonl(argv) {
   } else {
     for (const r of out) console.log(typeof r === "string" ? r : JSON.stringify(r));
   }
-  // Parse errors are surfaced, never swallowed: a silent drop is the failure mode here.
+  // Parse errors are always reported, never swallowed.
   if (!asJson) report(stats, false);
   return stats.parseErrors > 0 ? 3 : 0;
 }
