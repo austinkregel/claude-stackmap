@@ -2,23 +2,16 @@
 /**
  * SessionStart / SubagentStart hook: inject the house rules into Claude's context.
  *
- * Why a hook and not a file: a rule kept in a file nobody reads changes behaviour very little; the
- * same rule held in context does. SessionStart fires on startup, resume, clear, compact, and fork,
- * so the rules come back after compaction. SubagentStart injects them into every sub-agent, which
- * otherwise inherits no standing rules at all.
- *
  * What gets injected (houseRules config):
  *   mode "extend"  (default) the shipped house-rules/default.md, minus sections listed in
  *                  `disable` (by their `<!-- id: … -->`), followed by each file in `files`.
  *   mode "replace" only the files in `files`.
- * Then a short list, generated from the guard config, of which rules this plugin's hooks enforce
- * mechanically. The rules text never claims enforcement the config has switched off.
+ * Then a list, generated from the guard config, of which rules the hooks enforce, so the text never
+ * claims enforcement the config has switched off.
  *
- * Informational, so it fails OPEN, but never silently and never partially: a configured file that
- * is missing, unreadable, or empty, an unknown `disable` id, or a total over Claude Code's 10,000
- * character limit for hook output injects NOTHING and shows the user why. Injecting the rest would
- * make a partial rule set read as the complete one. Over the limit, Claude Code would replace the
- * text with a preview and a file path, which is a truncation the model would not notice.
+ * Fails open, visibly, and never partially: a configured file that is missing, unreadable, or
+ * empty, an unknown `disable` id, or a total over the 10,000-character hook output limit injects
+ * nothing and reports why.
  */
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -30,7 +23,7 @@ import { CATEGORIES } from "./suppression-rules.mjs";
 const HOOK = "house-rules";
 const EVENTS = new Set(["SessionStart", "SubagentStart"]);
 
-/** Claude Code caps additionalContext at 10,000 characters (hooks reference, "JSON output"). */
+/** Claude Code caps additionalContext at 10,000 characters. */
 const MAX_CONTEXT_CHARS = 10000;
 
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
