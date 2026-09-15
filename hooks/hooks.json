@@ -6,12 +6,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/guard.sh guard.mjs",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/guard",
+            "args": [
+              "guard.mjs"
+            ],
             "timeout": 15
           },
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/guard.sh no-truncate.mjs",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/guard",
+            "args": [
+              "no-truncate.mjs"
+            ],
             "timeout": 10
           }
         ]
@@ -21,7 +27,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/guard.sh no-suppress.mjs",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/guard",
+            "args": [
+              "no-suppress.mjs"
+            ],
             "timeout": 10
           }
         ]
@@ -32,12 +41,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh freshness.mjs",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook-open",
+            "args": [
+              "freshness.mjs"
+            ],
             "timeout": 30
           },
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh house-rules.mjs",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook-open",
+            "args": [
+              "house-rules.mjs"
+            ],
             "timeout": 10
           }
         ]
@@ -48,7 +63,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh house-rules.mjs",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook-open",
+            "args": [
+              "house-rules.mjs"
+            ],
             "timeout": 10
           }
         ]
@@ -60,7 +78,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh fetch-sanity.mjs",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook-open",
+            "args": [
+              "fetch-sanity.mjs"
+            ],
             "timeout": 10
           }
         ]
@@ -71,7 +92,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh skill-arm.mjs",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook-open",
+            "args": [
+              "skill-arm.mjs"
+            ],
             "timeout": 10
           }
         ]
@@ -82,7 +106,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh skill-check.mjs",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook-open",
+            "args": [
+              "skill-check.mjs"
+            ],
             "timeout": 10
           }
         ]
@@ -94,7 +121,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/hook-open.sh audit-check.mjs",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/hook-open",
+            "args": [
+              "audit-check.mjs"
+            ],
             "timeout": 60
           }
         ]
