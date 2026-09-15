@@ -1,5 +1,6 @@
 #!/bin/sh
 # stackmap CLI. On PATH whenever the plugin is enabled. Every command reports its counts.
+# bin/sm.cmd is its Windows twin.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 . "$ROOT/scripts/find-node.sh"
