@@ -3,11 +3,11 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const { NoteStore } = await import(join(root, "dist/notes/store.js"));
-const { noteSearch } = await import(join(root, "dist/notes/tools.js"));
+const { NoteStore } = await import(pathToFileURL(join(root, "dist/notes/store.js")).href);
+const { noteSearch } = await import(pathToFileURL(join(root, "dist/notes/tools.js")).href);
 
 const WORDS = ("service provider binding contract repository closure runtime cache queue job listener " +
   "migration schema index dealer inventory incentive offer campaign budget keyword adgroup salesforce " +
