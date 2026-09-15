@@ -3,7 +3,8 @@
  * sm CLI suite: every subcommand run through bin/sm on temporary fixtures, checking output, the
  * counts footer, --json, and exit codes. No build needed.
  */
-import { spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import crossSpawn from "cross-spawn";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -17,7 +18,7 @@ const check = (label, cond, detail = "") => {
   console.log(`${cond ? "PASS" : "FAIL"}  ${label}${cond ? "" : `  <- ${detail}`}`);
 };
 const run = (...args) => {
-  const r = spawnSync(sm, args, { encoding: "utf8", cwd: dir });
+  const r = crossSpawn.sync(sm, args, { encoding: "utf8", cwd: dir });
   return { code: r.status, out: r.stdout, err: r.stderr, show: `exit ${r.status}; stdout ${JSON.stringify(r.stdout.slice(0, 200))}; stderr ${JSON.stringify(r.stderr.slice(0, 200))}` };
 };
 const json = (r) => {
@@ -150,17 +151,21 @@ try {
 
   console.log("\n-- wait --");
   {
-    let r = run("wait", "--cmd", "echo ready", "--until", "ready", "--every", "0.1", "--timeout", "5");
+    // --cmd runs through the platform shell (sh, or cmd.exe on Windows), so the commands here are node
+    // one-liners and a node script: the same text and output under either shell.
+    const say = (text) => `"${process.execPath}" -e "console.log('${text}')"`;
+    f("count.mjs", 'import { existsSync, readFileSync, writeFileSync } from "node:fs";\nconst n = (existsSync("count") ? Number(readFileSync("count", "utf8")) : 0) + 1;\nwriteFileSync("count", String(n));\nprocess.exit(n >= 3 ? 0 : 1);\n');
+    let r = run("wait", "--cmd", say("ready"), "--until", "ready", "--every", "0.1", "--timeout", "5");
     check("--until satisfied exits 0 after one attempt", r.code === 0 && r.out === "ready\n" && /satisfied after 1 attempt/.test(r.err), r.show);
-    r = run("wait", "--cmd", "n=$(cat count 2>/dev/null || echo 0); n=$((n+1)); echo $n > count; [ $n -ge 3 ]", "--every", "0.1", "--timeout", "5", "--json");
+    r = run("wait", "--cmd", `"${process.execPath}" count.mjs`, "--every", "0.1", "--timeout", "5", "--json");
     check("a failing command is retried until it succeeds", r.code === 0 && json(r)?._stats?.status === "satisfied" && json(r)?._stats?.attempts === 3, r.show);
-    r = run("wait", "--cmd", "echo boom", "--fail", "boom", "--every", "0.1", "--timeout", "5");
+    r = run("wait", "--cmd", say("boom"), "--fail", "boom", "--every", "0.1", "--timeout", "5");
     check("--fail exits 1", r.code === 1 && /FAILED: matched --fail pattern/.test(r.err), r.show);
-    r = run("wait", "--cmd", "echo nope", "--until", "ready", "--every", "0.2", "--timeout", "0.7");
+    r = run("wait", "--cmd", say("nope"), "--until", "ready", "--every", "0.2", "--timeout", "0.7");
     check("a timeout exits 2 and prints the last output", r.code === 2 && r.out === "nope\n" && /TIMEOUT without matching after [2-9] attempt/.test(r.err), r.show);
-    r = run("wait", "--cmd", "echo nope", "--until", "ready", "--every", "0.2", "--timeout", "0.7", "--json");
+    r = run("wait", "--cmd", say("nope"), "--until", "ready", "--every", "0.2", "--timeout", "0.7", "--json");
     check("--json reports the timeout", r.code === 2 && json(r)?._stats?.status === "timeout" && json(r)?.output === "nope\n" && r.err === "", r.show);
-    r = run("wait", "--cmd", "echo boom", "--fail", "boom", "--json");
+    r = run("wait", "--cmd", say("boom"), "--fail", "boom", "--json");
     check("--json reports a --fail match", r.code === 1 && json(r)?._stats?.status === "failed", r.show);
     r = run("wait", "--until", "x");
     check("no --cmd exits 1 with usage", r.code === 1 && /usage: sm wait/.test(r.err), r.show);
@@ -213,12 +218,16 @@ try {
     const locked = join(dir, "locked");
     f("locked/inner/secret.jsonl", convo);
     f("locked/visible.jsonl", convo);
-    chmodSync(join(locked, "inner"), 0o000);
+    // Windows ignores read bits in chmod, so there the directory is made unlistable with a deny ACL for Everyone.
+    const inner = join(locked, "inner");
+    if (process.platform === "win32") execFileSync("icacls", [inner, "/deny", "*S-1-1-0:(RD)"], { stdio: "pipe" });
+    else chmodSync(inner, 0o000);
     try {
       r = run("dupes", locked);
       check("an unreadable subdirectory is listed and exits 1", r.code === 1 && /unreadable:\s+1/.test(r.out) && /inner/.test(r.out), r.show);
     } finally {
-      chmodSync(join(locked, "inner"), 0o755);
+      if (process.platform === "win32") execFileSync("icacls", [inner, "/remove:d", "*S-1-1-0"], { stdio: "pipe" });
+      else chmodSync(inner, 0o755);
     }
   }
 } finally {
