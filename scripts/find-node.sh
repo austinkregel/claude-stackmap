@@ -1,4 +1,5 @@
-# Shared node resolution, sourced by bin/sm, launch.sh, guard.sh, and hook-open.sh.
+# Shared node resolution for the POSIX launchers, sourced by bin/sm, scripts/launch, scripts/guard, and
+# scripts/hook-open. scripts/find-node.cmd does the same for their Windows twins.
 # PATH may be minimal, and a version-manager shim fails when its manager is off PATH, so every
 # candidate is verified by running it, and real installs are tried before shims.
 usable() { [ -n "${1:-}" ] && [ -x "$1" ] && "$1" --version >/dev/null 2>&1; }
