@@ -7,7 +7,7 @@
  * Every function sets `process.exitCode` and returns; `process.exit()` can cut off the decision
  * JSON before stdout flushes.
  *
- * Two failure modes, never mixed (see guard.sh and hook-open.sh):
+ * Two failure modes, never mixed (see scripts/guard and scripts/hook-open, and their .cmd twins):
  *   - Guardrails fail closed: `failClosed()` exits 2, the only code that blocks unconditionally.
  *   - Informational hooks fail open, visibly: `reportError()` emits a `systemMessage`, because
  *     stderr from a hook that exits 0 is never shown.
