@@ -1,0 +1,5 @@
+# Check out every text file with LF on every OS: the POSIX launchers (scripts/launch, scripts/guard,
+# scripts/hook-open, bin/sm) fail under sh with CRLF, and the suites read shipped files expecting LF.
+* text=auto eol=lf
+# The Windows twins are batch files and keep CRLF, the line ending cmd.exe is written for.
+*.cmd text eol=crlf
