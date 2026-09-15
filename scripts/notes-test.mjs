@@ -8,13 +8,13 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, appendFile
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const { NoteStore } = await import(join(root, "dist/notes/store.js"));
-const { noteWrite, noteSearch, noteGet, noteSupersede, noteQuery, noteSchemas } = await import(join(root, "dist/notes/tools.js"));
-const { NOTE_SCHEMAS, schemaJson } = await import(join(root, "dist/notes/schemas.js"));
-const { dataTokens } = await import(join(root, "dist/notes/search.js"));
+const { NoteStore } = await import(pathToFileURL(join(root, "dist/notes/store.js")).href);
+const { noteWrite, noteSearch, noteGet, noteSupersede, noteQuery, noteSchemas } = await import(pathToFileURL(join(root, "dist/notes/tools.js")).href);
+const { NOTE_SCHEMAS, schemaJson } = await import(pathToFileURL(join(root, "dist/notes/schemas.js")).href);
+const { dataTokens } = await import(pathToFileURL(join(root, "dist/notes/search.js")).href);
 
 let failed = 0;
 const check = (label, cond, detail = "") => {
