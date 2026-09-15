@@ -2,13 +2,13 @@
 /**
  * Suite for no-truncate.mjs: every allowance the rule promises, then every form it must block.
  */
-import { spawnSync } from "node:child_process";
+import crossSpawn from "cross-spawn";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const guard = join(dirname(fileURLToPath(import.meta.url)), "guard.sh");
+const guard = join(dirname(fileURLToPath(import.meta.url)), "guard");
 const BLOCK = 2, ALLOW = 0;
 const RULE_BLOCK = /^Blocked:/m;
 let failed = 0;
@@ -19,7 +19,7 @@ const env = { ...process.env, STACKMAP_CONFIG: configPath, STACKMAP_STATE: join(
 const setConfig = (obj) => writeFileSync(configPath, JSON.stringify(obj));
 
 function check(label, expected, payload, { raw = false, reason } = {}) {
-  const r = spawnSync(guard, ["no-truncate.mjs"], { input: raw ? payload : JSON.stringify(payload), encoding: "utf8", env });
+  const r = crossSpawn.sync(guard, ["no-truncate.mjs"], { input: raw ? payload : JSON.stringify(payload), encoding: "utf8", env });
   const want = reason ?? (expected === BLOCK ? RULE_BLOCK : null);
   const ok = r.status === expected && (!want || want.test(r.stderr ?? ""));
   if (!ok) failed++;
