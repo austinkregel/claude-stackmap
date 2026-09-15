@@ -8,11 +8,11 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const { configCandidates, loadConfig, selectIndex, selectScope, parseConfig, duplicateCaveats, addIndex, expandPath } = await import(join(root, "dist/config.js"));
-const { detectAdapter, getAdapter, clearAdapterCache, resolveRoots, requireCapability } = await import(join(root, "dist/adapters/registry.js"));
+const { configCandidates, loadConfig, selectIndex, selectScope, parseConfig, duplicateCaveats, addIndex, expandPath } = await import(pathToFileURL(join(root, "dist/config.js")).href);
+const { detectAdapter, getAdapter, clearAdapterCache, resolveRoots, requireCapability } = await import(pathToFileURL(join(root, "dist/adapters/registry.js")).href);
 
 let failed = 0;
 const check = (label, cond, detail = "") => {
@@ -29,10 +29,11 @@ const throws = (fn, pattern) => {
 };
 
 const sandbox = mkdtempSync(join(tmpdir(), "stackmap-config-"));
-const saved = { HOME: process.env.HOME, STACKMAP_CONFIG: process.env.STACKMAP_CONFIG, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, STACKMAP_CONFIG: process.env.STACKMAP_CONFIG, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME };
+/** Set the variables for a check. HOME also sets USERPROFILE, which os.homedir() reads on Windows. */
 const setEnv = (vars) => {
   for (const k of ["STACKMAP_CONFIG", "XDG_CONFIG_HOME"]) delete process.env[k];
-  Object.assign(process.env, vars);
+  Object.assign(process.env, vars, vars.HOME === undefined ? {} : { USERPROFILE: vars.HOME });
 };
 const write = (path, value) => {
   mkdirSync(dirname(path), { recursive: true });
@@ -168,7 +169,8 @@ try {
   write(join(sandbox, "a-file"), "");
   t = throws(() => resolveRoots(cfg({ indexes: [{ name: "m", root: main, aliases: [{ path: join(sandbox, "a-file") }] }] }).indexes[0]), /is not a directory/);
   check("an alias that is a file is an error", t.ok, t.detail);
-  symlinkSync(main, join(sandbox, "link-to-main"));
+  // "junction": a directory link Windows allows without admin rights; other platforms ignore the type.
+  symlinkSync(main, join(sandbox, "link-to-main"), "junction");
   t = throws(() => resolveRoots(cfg({ indexes: [{ name: "m", root: main, aliases: [{ path: join(sandbox, "link-to-main") }] }] }).indexes[0]), /lists the same directory twice/);
   check("an alias that resolves to the main root through a symlink is an error", t.ok, t.detail);
 
