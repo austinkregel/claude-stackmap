@@ -9,9 +9,9 @@ repo, each with a different runtime and different failure semantics:
 
 | Surface | Entry point | Runs from | Needs a build? |
 |---|---|---|---|
-| MCP server (`stackmap_*`, `note_*` tools) | `scripts/launch.sh` → `dist/index.js` | compiled TS | **yes** |
-| Hooks (guards, house rules, freshness, fetch sanity, skill and audit checks) | `hooks/hooks.json` → `scripts/*.sh` → `scripts/*.mjs` | plain `.mjs`, never `dist/` | no |
-| `sm` CLI | `bin/sm` → `scripts/cli/main.mjs` | plain `.mjs` | no |
+| MCP server (`stackmap_*`, `note_*` tools) | `scripts/launch` (`launch.cmd` on Windows) → `dist/index.js` | compiled TS | **yes** |
+| Hooks (guards, house rules, freshness, fetch sanity, skill and audit checks) | `hooks/hooks.json` → `scripts/guard` / `scripts/hook-open` (`.cmd` on Windows) → `scripts/*.mjs` | plain `.mjs`, never `dist/` | no |
+| `sm` CLI | `bin/sm` (`bin/sm.cmd` on Windows) → `scripts/cli/main.mjs` | plain `.mjs` | no |
 | Skills | `skills/*/SKILL.md` | markdown | no |
 | Agents | `agents/*.md` (auto-discovered; no `agents` key in `plugin.json`) | markdown | no |
 
@@ -32,13 +32,13 @@ npm run bench          # note retrieval latency + rank quality
 Run a single suite directly — they are standalone scripts, and there is no test-name filter:
 
 ```bash
-node scripts/plugin-test.mjs        # hooks.json wiring, name agreement, closing-block drift, npm test coverage
+node scripts/plugin-test.mjs        # hooks.json wiring, launcher twins and line endings, name agreement, closing-block drift, npm test coverage
 node scripts/shell-tokens-test.mjs  # shell parser the Bash guards evaluate (no build needed)
-node scripts/guard-test.mjs         # destructive commands, commit messages, guard.sh fail-closed paths
+node scripts/guard-test.mjs         # destructive commands, commit messages, the guard launcher's fail-closed paths
 node scripts/truncate-test.mjs      # no-truncate
 node scripts/suppress-test.mjs      # no-suppress + suppression catalog integrity
 node scripts/house-rules-test.mjs   # house rules: extend/replace/disable and every failure path
-node scripts/hooks-test.mjs         # hook-open.sh, freshness, fetch sanity, config.example.json
+node scripts/hooks-test.mjs         # the hook-open launcher, freshness, fetch sanity, config.example.json
 node scripts/skill-check-test.mjs   # /review and /double-blind closing blocks, arming, loop safety
 node scripts/audit-test.mjs         # the auditor's report check, Reproducers against transcript fixtures, lag retries
 node scripts/cli-test.mjs           # every sm subcommand through bin/sm: output, counts, --json, exit codes
@@ -49,7 +49,14 @@ node scripts/smoke.mjs              # every MCP tool over stdio: scope, aliases,
 ```
 
 Every suite uses temporary config, state, notes, and fixtures (`$STACKMAP_CONFIG`, `$STACKMAP_STATE`,
-`HOME`); keep it that way in any new test, so none reads your real config.
+`HOME` and `USERPROFILE`); keep it that way in any new test, so none reads your real config.
+
+Suites must run on Linux, macOS, and Windows (CI runs all three, `.github/workflows/test.yml`):
+- run launchers with `crossSpawn.sync(join(scripts, "guard"), …)`, never `spawnSync` on a launcher
+  path. On Windows, cross-spawn resolves the extensionless name to the `.cmd` twin through `cmd.exe`,
+  as Claude Code does for the MCP server. Node refuses to spawn a `.cmd` without a shell.
+- import `dist/` with `pathToFileURL(...).href`, since a `C:\` path isn't a valid ESM specifier.
+- set `USERPROFILE` wherever you set `HOME`, because `os.homedir()` reads it on Windows.
 
 Each suite prints `PASS`/`FAIL` per check and exits non-zero if any failed; add a `check(...)` call
 to extend one. A new `*-test.mjs` needs an npm script in the `test` chain; `plugin-test` fails
@@ -74,18 +81,35 @@ path is resolved.
 
 ### Node resolution
 
-`scripts/find-node.sh` is sourced by `bin/sm`, `launch.sh`, `guard.sh`, and `hook-open.sh`. Never
-replace these wrappers with a bare `node` command in `.mcp.json` or `hooks.json`.
+Every launcher is a pair (user decision): an extensionless POSIX sh file and a `.cmd` twin for
+Windows. The pairs are `scripts/launch`, `scripts/guard`, `scripts/hook-open`, and `bin/sm`.
+- **Node resolution.** `scripts/find-node.sh` is sourced by the sh launchers. `scripts/find-node.cmd`
+  is `call`ed by the `.cmd` twins and looks on PATH, then in `%ProgramFiles%\nodejs\node.exe`.
+- **Change both twins together.** They share script-name validation, messages' meaning, and exit
+  codes.
+- **Wiring.** `.mcp.json` and `hooks.json` name the extensionless path. Hooks use exec form
+  (`"command": "${CLAUDE_PLUGIN_ROOT}/scripts/guard"`, `"args": ["guard.mjs"]`): shell-form hooks need
+  Git Bash on Windows, and Claude Code refuses to run them without it.
+- **Never** replace a launcher with a bare `node` command or a shell-form command.
+- **Line endings.** `.gitattributes` keeps text LF and `*.cmd` CRLF. The `.cmd` files stay ASCII.
+  plugin-test checks both twins, the git executable bit, and line endings.
+- **Proven vs unverified** (from Claude Code 2.1.231's Windows build):
+  - PROVEN: the MCP server's `scripts/launch` resolves to `launch.cmd` through cross-spawn's PATHEXT
+    lookup.
+  - UNVERIFIED: exec-form hooks are spawned with plain `child_process.spawn` in Bun, and whether that
+    resolves `.cmd` has not been checked on Windows yet.
+  - A hook that fails to spawn is non-blocking.
 
 ### Two-tier hook failure semantics — do not mix them
 
 Both wrappers accept only `[a-z0-9-]+.mjs` script names.
 
-- `scripts/guard.sh <script>` → **fails closed** (exit 2). Wraps `guard.mjs`, `no-truncate.mjs`,
-  `no-suppress.mjs`. Any failure to evaluate a call blocks it; the suites assert those paths.
-- `scripts/hook-open.sh <script>` → **fails open, visibly** (exit 1 with a `systemMessage`). Wraps
-  `freshness.mjs`, `house-rules.mjs`, `fetch-sanity.mjs`, `skill-arm.mjs`, `skill-check.mjs`,
-  `audit-check.mjs`.
+- `scripts/guard <script>` (and `guard.cmd`) → **fails closed** (exit 2). Wraps `guard.mjs`,
+  `no-truncate.mjs`, `no-suppress.mjs`. Any failure to evaluate a call blocks it; the suites assert
+  those paths.
+- `scripts/hook-open <script>` (and `hook-open.cmd`) → **fails open, visibly** (exit 1 with a
+  `systemMessage`). Wraps `freshness.mjs`, `house-rules.mjs`, `fetch-sanity.mjs`, `skill-arm.mjs`,
+  `skill-check.mjs`, `audit-check.mjs`.
 
 `scripts/hook-lib.mjs` owns the wire protocol. Its helpers set `process.exitCode` and return; never
 call `process.exit()` after writing a decision. Stop blocks use top-level `{ "decision": "block", "reason" }`.
