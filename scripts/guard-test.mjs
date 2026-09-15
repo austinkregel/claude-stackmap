@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 /**
- * Suite for the destructive-command guard (guard.mjs) and the guard.sh wrapper, including every
+ * Suite for the destructive-command guard (guard.mjs) and its guard wrapper (scripts/guard, or guard.cmd on Windows), including every
  * fail-closed path. Uses a temporary $STACKMAP_CONFIG and $STACKMAP_STATE, never the real ones.
  */
-import { spawnSync, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import crossSpawn from "cross-spawn";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const guard = join(dirname(fileURLToPath(import.meta.url)), "guard.sh");
+const guard = join(dirname(fileURLToPath(import.meta.url)), "guard");
 const BLOCK = 2, ALLOW = 0;
 let failed = 0;
 
@@ -20,7 +21,7 @@ const setConfig = (obj) => writeFileSync(configPath, JSON.stringify(obj));
 
 function run(payload, { raw = false, script = "guard.mjs" } = {}) {
   const args = script === null ? [] : [script];
-  const r = spawnSync(guard, args, { input: raw ? payload : JSON.stringify(payload), encoding: "utf8", env });
+  const r = crossSpawn.sync(guard, args, { input: raw ? payload : JSON.stringify(payload), encoding: "utf8", env });
   return { code: r.status, out: r.stdout ?? "", err: r.stderr ?? "" };
 }
 
@@ -137,9 +138,9 @@ try {
   setConfig({});
 
   console.log("\n-- the wrapper must fail CLOSED --");
-  check("guard.sh with no script named", BLOCK, bash("ls"), { script: null, reason: /no hook script named/ });
-  check("guard.sh with a path-escaping name", BLOCK, bash("ls"), { script: "../bin/sm.mjs", reason: /invalid hook script name/ });
-  check("guard.sh with a missing script", BLOCK, bash("ls"), { script: "does-not-exist.mjs", reason: /missing/ });
+  check("guard with no script named", BLOCK, bash("ls"), { script: null, reason: /no hook script named/ });
+  check("guard with a path-escaping name", BLOCK, bash("ls"), { script: "../bin/sm.mjs", reason: /invalid hook script name/ });
+  check("guard with a missing script", BLOCK, bash("ls"), { script: "does-not-exist.mjs", reason: /missing/ });
 
   console.log("\n-- non-Bash tools are untouched --");
   check("Read tool passes through", ALLOW, { hook_event_name: "PreToolUse", tool_name: "Read", tool_input: { file_path: "/x" } });
