@@ -7,7 +7,7 @@
  * Transcript fixtures use the record shapes captured from a real auditor stop (Claude Code 2.1.231),
  * laid out as <projects>/<session>/subagents/agent-<id>.jsonl beside <session>/tool-results/.
  */
-import { spawnSync } from "node:child_process";
+import crossSpawn from "cross-spawn";
 import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -16,7 +16,7 @@ import { checkTranscript, readBashCalls, TranscriptError } from "./agent-transcr
 import { sameShellCommand, verifyReproducers } from "./deliverables.mjs";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
-const runner = join(scripts, "hook-open.sh");
+const runner = join(scripts, "hook-open");
 const sandbox = mkdtempSync(join(tmpdir(), "stackmap-audit-"));
 const env = { ...process.env, STACKMAP_STATE: join(sandbox, "state"), STACKMAP_CONFIG: join(sandbox, "config.json") };
 const session = join(sandbox, "projects", "session-1");
@@ -48,7 +48,7 @@ const OUT = "stackmap guard: scripts/nope.mjs is missing\nexit=2";
 let DEFAULT_TRANSCRIPT;
 
 const stop = (msg, extra = {}) =>
-  spawnSync(runner, ["audit-check.mjs"], {
+  crossSpawn.sync(runner, ["audit-check.mjs"], {
     input: JSON.stringify({
       hook_event_name: "SubagentStop",
       session_id: "s",
@@ -306,7 +306,7 @@ try {
   check("another agent type is reported, not passed", r.status === 1 && /called for \\"Explore\\"; that report was not checked/.test(r.stdout), show(r));
   r = stop(SURVIVED, { hook_event_name: "Stop" });
   check("an unexpected event is reported", r.status === 1 && /unexpected event/.test(r.stdout), show(r));
-  r = spawnSync(runner, ["audit-check.mjs"], { input: "{not json", encoding: "utf8", env });
+  r = crossSpawn.sync(runner, ["audit-check.mjs"], { input: "{not json", encoding: "utf8", env });
   check("a broken payload fails OPEN (exit 1) with a systemMessage", r.status === 1 && /"systemMessage":"stackmap audit-check:/.test(r.stdout), show(r));
 } finally {
   rmSync(sandbox, { recursive: true, force: true });
