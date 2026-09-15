@@ -4,7 +4,7 @@
  *
  * Fixtures are fragmented with F() so the guard can save this file.
  */
-import { spawnSync } from "node:child_process";
+import crossSpawn from "cross-spawn";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { RULES, CATEGORIES, rulesForPath } from "./suppression-rules.mjs";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
-const guard = join(scripts, "guard.sh");
+const guard = join(scripts, "guard");
 const BLOCK = 2, ALLOW = 0;
 const RULE_BLOCK = /^Blocked:/m;
 let failed = 0;
@@ -29,7 +29,7 @@ const tally = (ok) => {
 };
 
 function check(label, expected, payload, { raw = false, reason } = {}) {
-  const r = spawnSync(guard, ["no-suppress.mjs"], { input: raw ? payload : JSON.stringify(payload), encoding: "utf8", env });
+  const r = crossSpawn.sync(guard, ["no-suppress.mjs"], { input: raw ? payload : JSON.stringify(payload), encoding: "utf8", env });
   const want = reason ?? (expected === BLOCK ? RULE_BLOCK : null);
   const ok = tally(r.status === expected && (!want || want.test(r.stderr ?? "")));
   const verdict = r.status === BLOCK ? "BLOCK" : r.status === ALLOW ? "allow" : `exit ${r.status}`;
