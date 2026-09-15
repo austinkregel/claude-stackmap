@@ -6,14 +6,14 @@
  * Runs against a temporary state directory ($STACKMAP_STATE), so it never touches real session
  * markers.
  */
-import { spawnSync } from "node:child_process";
+import crossSpawn from "cross-spawn";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
-const runner = join(scripts, "hook-open.sh");
+const runner = join(scripts, "hook-open");
 const state = mkdtempSync(join(tmpdir(), "stackmap-skill-check-"));
 const env = { ...process.env, STACKMAP_STATE: state, STACKMAP_CONFIG: join(state, "config.json") };
 const DIR = join(state, "sessions");
@@ -26,7 +26,7 @@ const check = (label, cond, detail = "") => {
   if (!cond) failed++;
   console.log(`${cond ? "PASS" : "FAIL"}  ${label}${cond ? "" : `  <- ${detail}`}`);
 };
-const run = (script, payload) => spawnSync(runner, [script], { input: JSON.stringify(payload), encoding: "utf8", env });
+const run = (script, payload) => crossSpawn.sync(runner, [script], { input: JSON.stringify(payload), encoding: "utf8", env });
 const arm = (prompt, extra = {}) => run("skill-arm.mjs", { hook_event_name: "UserPromptSubmit", session_id: SID, prompt, cwd: state, ...extra });
 const stop = (msg, extra = {}) => run("skill-check.mjs", { hook_event_name: "Stop", session_id: SID, last_assistant_message: msg, ...extra });
 const json = (r) => {
@@ -166,9 +166,9 @@ try {
   console.log("\n-- failures are visible, never silent --");
   r = arm("/review x", { session_id: undefined });
   check("arming with no session id is reported, not swallowed", r.status === 1 && /NOT armed/.test(r.stdout), `exit ${r.status}, stdout ${r.stdout.slice(0, 120)}`);
-  r = spawnSync(runner, ["skill-arm.mjs"], { input: JSON.stringify({ prompt: "/review", session_id: SID }), encoding: "utf8", env: { ...env, STACKMAP_STATE: "relative/state" } });
+  r = crossSpawn.sync(runner, ["skill-arm.mjs"], { input: JSON.stringify({ prompt: "/review", session_id: SID }), encoding: "utf8", env: { ...env, STACKMAP_STATE: "relative/state" } });
   check("a relative $STACKMAP_STATE is rejected visibly", r.status === 1 && /must be an absolute path/.test(r.stdout), `exit ${r.status}, stdout ${r.stdout.slice(0, 120)}`);
-  r = spawnSync(runner, ["skill-check.mjs"], { input: "{not json", encoding: "utf8", env });
+  r = crossSpawn.sync(runner, ["skill-check.mjs"], { input: "{not json", encoding: "utf8", env });
   check("a broken Stop payload fails OPEN (exit 1, non-blocking)", r.status === 1, `exit ${r.status}`);
   check("…and says so in a systemMessage", /"systemMessage":"stackmap skill-check:/.test(r.stdout), r.stdout.slice(0, 120));
 } finally {
