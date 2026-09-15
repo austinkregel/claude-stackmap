@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
  * Plugin wiring and drift suite: hooks.json points at real scripts through the right wrapper, every
- * hook script is wired, names agree across the manifest, agents, skills, and hooks, and the closing
+ * launcher has a POSIX file and a Windows .cmd twin with the right line endings, every hook script is wired, names agree across the manifest, agents, skills, and hooks, and the closing
  * blocks written in the skill and agent files match the ones the hooks enforce. No build needed.
  */
+import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,7 +23,11 @@ const check = (label, cond, detail = "") => {
 /** Scripts that fail closed; everything else fails open. */
 const GUARDS = ["guard.mjs", "no-truncate.mjs", "no-suppress.mjs"];
 const EVENTS = ["PreToolUse", "PostToolUse", "SessionStart", "SubagentStart", "SubagentStop", "UserPromptSubmit", "Stop"];
-const COMMAND = /^"\$\{CLAUDE_PLUGIN_ROOT\}"\/scripts\/(guard\.sh|hook-open\.sh) ([a-z0-9-]+\.mjs)$/;
+/** Exec form: the extensionless launcher, which is the sh file on macOS/Linux and resolves to its .cmd twin on Windows. */
+const COMMAND = /^\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/(guard|hook-open)$/;
+const SCRIPT = /^[a-z0-9-]+\.mjs$/;
+/** Every launcher: an extensionless POSIX sh file plus a .cmd twin for Windows. */
+const LAUNCHERS = ["scripts/launch", "scripts/guard", "scripts/hook-open", "bin/sm"];
 
 /** Every `{ event, matcher, wrapper, script, timeout }` in hooks.json. */
 function hookEntries() {
@@ -31,7 +36,8 @@ function hookEntries() {
     for (const group of groups) {
       for (const hook of group.hooks) {
         const m = COMMAND.exec(hook.command ?? "");
-        out.push({ event, matcher: group.matcher, type: hook.type, command: hook.command, wrapper: m?.[1], script: m?.[2], timeout: hook.timeout });
+        const script = m && Array.isArray(hook.args) && hook.args.length === 1 && SCRIPT.test(hook.args[0]) ? hook.args[0] : undefined;
+        out.push({ event, matcher: group.matcher, type: hook.type, command: JSON.stringify([hook.command, hook.args]), wrapper: m?.[1], script, timeout: hook.timeout });
       }
     }
   }
@@ -66,10 +72,10 @@ check("hooks.json has entries", entries.length > 0);
 for (const e of entries) {
   const where = `${e.event}${e.matcher ? ` [${e.matcher}]` : ""} ${e.script ?? e.command}`;
   check(`${where}: a known event`, EVENTS.includes(e.event), e.event);
-  check(`${where}: a command through guard.sh or hook-open.sh`, e.type === "command" && Boolean(e.script), e.command);
+  check(`${where}: an exec-form command through scripts/guard or scripts/hook-open, with the script as its one argument`, e.type === "command" && Boolean(e.script), e.command);
   if (!e.script) continue;
   check(`${where}: the script exists`, existsSync(join(scripts, e.script)));
-  const expected = GUARDS.includes(e.script) ? "guard.sh" : "hook-open.sh";
+  const expected = GUARDS.includes(e.script) ? "guard" : "hook-open";
   check(`${where}: runs through ${expected}`, e.wrapper === expected, e.wrapper);
   check(`${where}: sets a timeout of 1–60 seconds`, Number.isFinite(e.timeout) && e.timeout >= 1 && e.timeout <= 60, String(e.timeout));
   if (e.matcher !== undefined) {
@@ -101,10 +107,38 @@ if (audit?.matcher) {
   check("the audit-check matcher matches the auditor exactly", re.test(AUDITOR_AGENT) && !re.test(`${AUDITOR_AGENT}-2`) && !re.test("Explore") && !re.test(`x${AUDITOR_AGENT}`), audit.matcher);
 }
 
+console.log("\n-- launchers --");
+// Git records the executable bit, so it's read from the index: that works on a Windows checkout too.
+const indexModes = new Map(
+  execFileSync("git", ["ls-files", "-s", "--", ...LAUNCHERS], { cwd: root, encoding: "utf8" })
+    .split("\n").filter(Boolean).map((line) => [line.split("\t")[1], line.split(" ")[0]]),
+);
+for (const launcher of LAUNCHERS) {
+  const sh = join(root, launcher);
+  const cmd = `${sh}.cmd`;
+  check(`${launcher}: the POSIX launcher exists`, existsSync(sh));
+  check(`${launcher}.cmd: the Windows twin exists`, existsSync(cmd));
+  if (!existsSync(sh) || !existsSync(cmd)) continue;
+  const shText = readFileSync(sh, "utf8");
+  const cmdBytes = readFileSync(cmd, "latin1");
+  check(`${launcher}: a #!/bin/sh script`, shText.startsWith("#!/bin/sh\n"), JSON.stringify(shText.slice(0, 20)));
+  check(`${launcher}: committed as executable`, indexModes.get(launcher) === "100755", indexModes.get(launcher) ?? "(not in the index)");
+  check(`${launcher}: LF line endings (sh fails on CR)`, !shText.includes("\r"));
+  check(`${launcher}.cmd: CRLF line endings on every line`, cmdBytes.split("\n").slice(0, -1).every((l) => l.endsWith("\r")) && cmdBytes.endsWith("\r\n"));
+  check(`${launcher}.cmd: plain ASCII (cmd.exe reads batch files in the OEM code page)`, /^[\t\r\n\x20-\x7e]*$/.test(cmdBytes));
+}
+check("find-node.cmd exists beside find-node.sh", existsSync(join(scripts, "find-node.cmd")) && existsSync(join(scripts, "find-node.sh")));
+check("no .sh launcher remains", !["launch.sh", "guard.sh", "hook-open.sh"].some((f) => existsSync(join(scripts, f))));
+const gitattributes = read(".gitattributes");
+check(".gitattributes checks text out as LF, and .cmd as CRLF", /^\* text=auto eol=lf$/m.test(gitattributes) && /^\*\.cmd text eol=crlf$/m.test(gitattributes), gitattributes);
+
 console.log("\n-- manifest, agents, skills --");
 const plugin = JSON.parse(read(".claude-plugin/plugin.json"));
 check("plugin.json has no agents key (agents/ is auto-discovered)", !("agents" in plugin));
 check("plugin.json points at .mcp.json", plugin.mcpServers === "./.mcp.json" && existsSync(join(root, ".mcp.json")));
+const mcp = JSON.parse(read(".mcp.json"));
+check(".mcp.json starts the server through the extensionless launcher, with no shell syntax",
+  mcp.mcpServers?.stackmap?.command === "${CLAUDE_PLUGIN_ROOT}/scripts/launch" && mcp.mcpServers.stackmap.args === undefined, JSON.stringify(mcp));
 
 const agentFiles = readdirSync(join(root, "agents")).filter((f) => f.endsWith(".md"));
 const auditorFile = agentFiles.find((f) => `${plugin.name}:${frontmatter(read(`agents/${f}`)).name}` === AUDITOR_AGENT);
