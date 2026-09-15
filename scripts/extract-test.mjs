@@ -5,12 +5,12 @@
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const { extractBindings } = await import(join(root, "dist/php/bindings.js"));
-const { extractDeclarations } = await import(join(root, "dist/php/declarations.js"));
-const { laravelFactory } = await import(join(root, "dist/adapters/laravel.js"));
+const { extractBindings } = await import(pathToFileURL(join(root, "dist/php/bindings.js")).href);
+const { extractDeclarations } = await import(pathToFileURL(join(root, "dist/php/declarations.js")).href);
+const { laravelFactory } = await import(pathToFileURL(join(root, "dist/adapters/laravel.js")).href);
 
 let failed = 0;
 const check = (label, cond, detail = "") => {
