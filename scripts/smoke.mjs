@@ -33,7 +33,8 @@ const write = (base, rel, text) => {
 };
 
 async function connect(env) {
-  const base = { ...process.env, HOME: home };
+  // USERPROFILE too: os.homedir() reads it on Windows, so the no-config server never sees the real home.
+  const base = { ...process.env, HOME: home, USERPROFILE: home };
   delete base.STACKMAP_CONFIG;
   delete base.XDG_CONFIG_HOME;
   const client = new Client({ name: "stackmap-smoke", version: "1" }, { capabilities: {} });
