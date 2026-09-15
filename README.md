@@ -54,8 +54,32 @@ Start a new session or run `/reload-plugins`. A server that failed to start is l
 **Errors** tab of `/plugin`. After each `npm run build`, run `/reload-plugins` to pick up the new
 `dist/`.
 
-`.mcp.json` starts the server through `scripts/launch.sh`, which finds a working `node` binary and
+`.mcp.json` starts the server through `scripts/launch`, which finds a working `node` binary and
 prints an error on stderr if none works.
+
+### Launchers and Windows
+
+Every entry point is an extensionless POSIX sh launcher with a Windows `.cmd` twin:
+
+| Launcher | Windows twin | Runs |
+|---|---|---|
+| `scripts/launch` | `scripts/launch.cmd` | the MCP server |
+| `scripts/guard` | `scripts/guard.cmd` | guardrail hooks (fail closed) |
+| `scripts/hook-open` | `scripts/hook-open.cmd` | informational hooks (fail open) |
+| `bin/sm` | `bin/sm.cmd` | the `sm` CLI |
+
+- **How they're called.** `.mcp.json` and `hooks.json` name the extensionless path. Hooks use exec form
+  (`"command"` plus `"args"`), so no shell is involved. On Windows the path resolves to the `.cmd` twin.
+- **Finding node.** The sh launchers look on PATH, then in asdf, nvm, and mise installs, Homebrew, and
+  shims. The `.cmd` launchers look on PATH, then in `%ProgramFiles%\nodejs\node.exe`.
+- **Line endings.** `.gitattributes` checks out every text file with LF and the `.cmd` files with CRLF.
+- **Windows status.**
+  - The MCP server resolves `scripts/launch` to `launch.cmd` in Claude Code's Windows build.
+  - Whether exec-form hooks resolve to their `.cmd` twin there has not been verified yet. If they don't,
+    the hooks fail to start, and a hook that fails to start does not block.
+  - The Bash guards match the `Bash` tool only. On a Windows machine without Git Bash, Claude Code runs
+    shell commands through its PowerShell tool, which those guards are not written for.
+  - CI runs every suite on Linux, macOS, and Windows (`.github/workflows/test.yml`).
 
 ## Configuration
 
@@ -339,7 +363,8 @@ and hook bypasses.
 - Every path that cannot evaluate a call exits 2: unreadable stdin, malformed JSON, invalid config
   (including a misspelled key), a command the shell would reject, a filter or git subcommand only
   known at runtime, a missing script, no usable node.
-- `scripts/guard.sh <script.mjs>` wraps every guardrail and accepts only `[a-z0-9-]+.mjs` names.
+- `scripts/guard <script.mjs>` (or `guard.cmd` on Windows) wraps every guardrail and accepts only
+  `[a-z0-9-]+.mjs` names.
 - The guards read config through `scripts/hook-config.mjs`, not `dist/`.
 - A `PreToolUse` hook that times out lets the call through, so every hook entry sets a short
   explicit `timeout`.
@@ -445,7 +470,7 @@ ends and the user is told what is missing.
 
 `freshness` (SessionStart), `house-rules`, `fetch-sanity` (PostToolUse), `skill-arm` /
 `skill-check` (UserPromptSubmit / Stop), and `audit-check` (SubagentStop) run through
-`scripts/hook-open.sh <script.mjs>` and fail open: a failure exits 1 with a `systemMessage` for the
+`scripts/hook-open <script.mjs>` (or `hook-open.cmd` on Windows) and fail open: a failure exits 1 with a `systemMessage` for the
 user and never blocks a session, prompt, tool result, or turn. A `git fetch` that fails at session
 start is stated in the freshness context.
 
@@ -493,13 +518,13 @@ npm run check              # typecheck only
 npm run build              # compile to dist/
 npm test                   # every suite
 npm run bench              # note retrieval latency and rank quality
-npm run plugin-test        # hooks.json wiring, names, and closing-block drift
+npm run plugin-test        # hooks.json wiring, launcher twins and line endings, names, and closing-block drift
 npm run shell-tokens-test  # the shell parser the Bash guards evaluate
-npm run guard-test         # destructive-command and commit-message rules, guard.sh
+npm run guard-test         # destructive-command and commit-message rules, the guard launcher
 npm run truncate-test      # no-truncate
 npm run suppress-test      # no-suppress and the suppression catalog
 npm run house-rules-test   # house rules: extend/replace/disable, and every failure path
-npm run hooks-test         # hook-open.sh, freshness, fetch sanity, config.example.json
+npm run hooks-test         # the hook-open launcher, freshness, fetch sanity, config.example.json
 npm run skill-check-test   # closing blocks for /review and /double-blind
 npm run audit-test         # the auditor's report check
 npm run cli-test           # every sm subcommand: output, counts, --json, exit codes
@@ -510,7 +535,9 @@ npm run smoke              # every MCP tool over stdio on Laravel fixtures, incl
 ```
 
 Every suite uses temporary config, state, and fixtures, so none needs or reads your own config.
-`config-test`, `extract-test`, `notes-test`, and `smoke` need `npm run build` first.
+`config-test`, `extract-test`, `notes-test`, and `smoke` need `npm run build` first. Suites run the
+launchers through `cross-spawn`, which on Windows resolves an extensionless launcher to its `.cmd` twin
+the same way Claude Code does for the MCP server.
 
 ## Layout
 
@@ -518,7 +545,7 @@ Every suite uses temporary config, state, and fixtures, so none needs or reads y
 src/
   config.ts            config schema (per-entry validation), resolution, project and scope selection, adding a project
   index.ts             MCP server — tool definitions, argument checks, and dispatch
-  args.ts              numeric tool arguments
+  args.ts              tool argument type checks: numbers, strings, string lists, booleans
   notes/store.ts       note files and typed data files, file stamping, drift, caching
   notes/search.ts      BM25 over an inverted index, and the data tokenizer
   notes/schemas.ts     the shipped typed-note schemas and record validation
@@ -547,7 +574,9 @@ scripts/
   skill-arm.mjs / skill-check.mjs  closing-block enforcement for /review and /double-blind
   audit-check.mjs      the auditor's report check, Reproducers verified against its transcript
   agent-transcript.mjs reads a subagent transcript's Bash calls and results (a library, not a hook)
-  guard.sh / hook-open.sh  fail-closed / fail-open wrappers
+  guard, hook-open     fail-closed / fail-open wrappers (sh), each with a .cmd twin for Windows
+  launch               MCP server launcher (sh), with launch.cmd
+  find-node.sh / find-node.cmd  node resolution for the sh / .cmd launchers
   cli/                 the sm CLI
 agents/
   adversarial-auditor.md
