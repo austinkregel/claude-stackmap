@@ -1,5 +1,6 @@
 #!/bin/sh
-# Launch the stackmap MCP server. Every failure exits with a message on stderr, never silently.
+# Launch the stackmap MCP server on macOS and Linux; scripts/launch.cmd is its Windows twin.
+# Every failure exits with a message on stderr, never silently.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 . "$ROOT/scripts/find-node.sh"
