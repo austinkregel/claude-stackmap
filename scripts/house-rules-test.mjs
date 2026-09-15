@@ -3,14 +3,14 @@
  * Suite for house-rules.mjs: what is injected under each config, and that every failure injects
  * nothing while telling the user why. Checks inspect the injected output, not just the exit code.
  */
-import { spawnSync } from "node:child_process";
+import crossSpawn from "cross-spawn";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
-const runner = join(scripts, "hook-open.sh");
+const runner = join(scripts, "hook-open");
 let failed = 0;
 const check = (label, cond, detail = "") => {
   if (!cond) failed++;
@@ -23,7 +23,7 @@ const env = { ...process.env, STACKMAP_CONFIG: configPath, STACKMAP_STATE: join(
 const setConfig = (obj) => writeFileSync(configPath, JSON.stringify(obj));
 
 function inject(event = "SessionStart", hookRunner = runner) {
-  const r = spawnSync(hookRunner, ["house-rules.mjs"], {
+  const r = crossSpawn.sync(hookRunner, ["house-rules.mjs"], {
     input: JSON.stringify({ hook_event_name: event, session_id: "t", cwd: sandbox, source: "startup" }),
     encoding: "utf8",
     env,
@@ -161,7 +161,7 @@ try {
   const plugin = join(sandbox, "plugin");
   cpSync(scripts, join(plugin, "scripts"), { recursive: true });
   cpSync(join(scripts, "..", "house-rules"), join(plugin, "house-rules"), { recursive: true });
-  const pluginRunner = join(plugin, "scripts", "hook-open.sh");
+  const pluginRunner = join(plugin, "scripts", "hook-open");
   const withDefault = (text) => writeFileSync(join(plugin, "house-rules", "default.md"), text);
   const expectDefaultDefect = (label, pattern) => {
     const r = inject("SessionStart", pluginRunner);
