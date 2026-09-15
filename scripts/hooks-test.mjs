@@ -1,16 +1,17 @@
 #!/usr/bin/env node
 /**
- * Suite for the informational hooks and their wrapper: hook-open.sh, freshness.mjs, and
+ * Suite for the informational hooks and their wrapper: hook-open (hook-open.cmd on Windows), freshness.mjs, and
  * fetch-sanity.mjs. Each check asserts both the exit code and what the user or Claude would see.
  */
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
+import crossSpawn from "cross-spawn";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scripts = dirname(fileURLToPath(import.meta.url));
-const runner = join(scripts, "hook-open.sh");
+const runner = join(scripts, "hook-open");
 let failed = 0;
 const check = (label, cond, detail = "") => {
   if (!cond) failed++;
@@ -21,7 +22,7 @@ const sandbox = mkdtempSync(join(tmpdir(), "stackmap-hooks-"));
 const env = { ...process.env, STACKMAP_CONFIG: join(sandbox, "config.json"), STACKMAP_STATE: join(sandbox, "state") };
 writeFileSync(env.STACKMAP_CONFIG, "{}");
 const run = (script, input, extraEnv = {}) =>
-  spawnSync(runner, script === null ? [] : [script], {
+  crossSpawn.sync(runner, script === null ? [] : [script], {
     input: typeof input === "string" ? input : JSON.stringify(input),
     encoding: "utf8",
     env: { ...env, ...extraEnv },
@@ -29,7 +30,7 @@ const run = (script, input, extraEnv = {}) =>
 const git = (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 
 try {
-  console.log("-- hook-open.sh: fails open, visibly --");
+  console.log("-- hook-open: fails open, visibly --");
   for (const [label, script, pattern] of [
     ["no script named", null, /no hook script named/],
     ["path-escaping script name", "../bin/sm.mjs", /invalid hook script name/],
@@ -50,7 +51,7 @@ try {
   {
     // An example that drifts from hook-config.mjs makes every guard fail closed for anyone who copies it.
     const example = join(scripts, "..", "config.example.json");
-    const guarded = spawnSync(join(scripts, "guard.sh"), ["guard.mjs"], {
+    const guarded = crossSpawn.sync(join(scripts, "guard"), ["guard.mjs"], {
       input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", cwd: sandbox, tool_input: { command: "ls" } }),
       encoding: "utf8",
       env: { ...env, STACKMAP_CONFIG: example },
