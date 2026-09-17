@@ -6,7 +6,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 . "$ROOT/scripts/find-node.sh"
 
 if ! NODE=$(find_node); then
-  echo "stackmap: no usable node binary found. Install Node 18+, or hardcode its path in scripts/find-node.sh." >&2
+  echo "stackmap: no usable node binary found. Install Node 22.13+, or hardcode its path in scripts/find-node.sh." >&2
   exit 1
 fi
 ENTRY="$ROOT/dist/index.js"
