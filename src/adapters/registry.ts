@@ -1,11 +1,16 @@
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { expandPath, type Config, type IndexConfig } from "../config.js";
+import { ghidraFactory } from "./ghidra/adapter.js";
 import { laravelFactory } from "./laravel.js";
 import type { AdapterFactory, AdapterId, Capability, IndexedAdapter, IndexRoot } from "./types.js";
 
-/** Implemented adapters, in detection order: the first whose `detect` matches wins. */
-const FACTORIES: AdapterFactory[] = [laravelFactory];
+/**
+ * Implemented adapters, in detection order: the first whose `detect` matches wins. Ghidra comes first
+ * (user decision): a `.gpr` marks a Ghidra project directory, and such a directory could also hold a
+ * package manifest that another adapter would claim.
+ */
+const FACTORIES: AdapterFactory[] = [ghidraFactory, laravelFactory];
 
 /**
  * Stacks detected by marker file but not served yet, checked after every implemented adapter, so the
