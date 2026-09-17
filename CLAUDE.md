@@ -87,6 +87,11 @@ Every launcher is a pair (user decision): an extensionless POSIX sh file and a `
 Windows. The pairs are `scripts/launch`, `scripts/guard`, `scripts/hook-open`, and `bin/sm`.
 - **Node resolution.** `scripts/find-node.sh` is sourced by the sh launchers. `scripts/find-node.cmd`
   is `call`ed by the `.cmd` twins and looks on PATH, then in `%ProgramFiles%\nodejs\node.exe`.
+- **One Node minimum, stated three times.** `engines.node` in package.json, `NODE_MIN_MAJOR`/
+  `NODE_MIN_MINOR` in `find-node.sh`, and the same pair in `find-node.cmd` must agree; plugin-test
+  checks it. It is **22.13**, where `node:sqlite` stopped needing `--experimental-sqlite` (the Ghidra
+  adapter's index; user decision). Each candidate node is run and an older one is rejected, so the
+  launcher reports the version instead of `dist/` failing on an import.
 - **Change both twins together.** They share script-name validation, messages' meaning, and exit
   codes.
 - **Wiring.** `.mcp.json` and `hooks.json` name the extensionless path. Hooks use exec form
