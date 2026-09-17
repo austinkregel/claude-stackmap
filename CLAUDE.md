@@ -9,7 +9,7 @@ repo, each with a different runtime and different failure semantics:
 
 | Surface | Entry point | Runs from | Needs a build? |
 |---|---|---|---|
-| MCP server (`stackmap_*`, `note_*` tools) | `scripts/launch` (`launch.cmd` on Windows) → `dist/index.js` | compiled TS | **yes** |
+| MCP server (`stackmap_*`, `note_*`, `plan_*` tools) | `scripts/launch` (`launch.cmd` on Windows) → `dist/index.js` | compiled TS | **yes** |
 | Hooks (guards, house rules, freshness, fetch sanity, skill and audit checks) | `hooks/hooks.json` → `scripts/guard` / `scripts/hook-open` (`.cmd` on Windows) → `scripts/*.mjs` | plain `.mjs`, never `dist/` | no |
 | `sm` CLI | `bin/sm` (`bin/sm.cmd` on Windows) → `scripts/cli/main.mjs` | plain `.mjs` | no |
 | Skills | `skills/*/SKILL.md` | markdown | no |
@@ -34,7 +34,7 @@ Run a single suite directly — they are standalone scripts, and there is no tes
 ```bash
 node scripts/plugin-test.mjs        # hooks.json wiring, launcher twins and line endings, name agreement, closing-block drift, npm test coverage
 node scripts/shell-tokens-test.mjs  # shell parser the Bash guards evaluate (no build needed)
-node scripts/guard-test.mjs         # destructive commands, commit messages, the guard launcher's fail-closed paths
+node scripts/guard-test.mjs         # destructive commands, commit messages, plan-identity stamping, the guard launcher's fail-closed paths
 node scripts/truncate-test.mjs      # no-truncate
 node scripts/suppress-test.mjs      # no-suppress + suppression catalog integrity
 node scripts/house-rules-test.mjs   # house rules: extend/replace/disable and every failure path
@@ -46,7 +46,7 @@ node scripts/config-test.mjs        # config resolution, per-entry validation, s
 node scripts/extract-test.mjs       # PHP extractors + adapter wiring, several roots, inline fixtures  (needs dist/)
 node scripts/notes-test.mjs         # note store: supersession, drift, stamps across roots, file format, typed notes, note_query, tokenizer  (needs dist/)
 node scripts/plans-test.mjs         # plan store: plans config section, record validation, nesting, ownership, final states, closing
-node scripts/smoke.mjs              # every MCP tool over stdio: scope, aliases, duplicates, add-index, typed notes, notesDir change, plus a no-config server  (needs dist/)
+node scripts/smoke.mjs              # every MCP tool over stdio: scope, aliases, duplicates, add-index, typed notes, notesDir change, plan tools, plus a no-config server  (needs dist/)
 ```
 
 Every suite uses temporary config, state, notes, and fixtures (`$STACKMAP_CONFIG`, `$STACKMAP_STATE`,
@@ -74,6 +74,7 @@ adapter.
 
 Notes live under `notesDir` (default `~/.config/stackmap/notes/`): one markdown file per note, plus a
 `<id>.json` data file beside each typed note.
+Plans live under `plans.dir` (default `~/.config/stackmap/plans/`): one `<id>.json` per plan.
 Per-session hook state (`sessions/<id>.review.json`) lives in `~/.stackmap/`, or under
 `$STACKMAP_STATE` (must be absolute). `stateDir()` in `scripts/hook-lib.mjs` is the only place that
 path is resolved.
@@ -106,8 +107,8 @@ Windows. The pairs are `scripts/launch`, `scripts/guard`, `scripts/hook-open`, a
 Both wrappers accept only `[a-z0-9-]+.mjs` script names.
 
 - `scripts/guard <script>` (and `guard.cmd`) → **fails closed** (exit 2). Wraps `guard.mjs`,
-  `no-truncate.mjs`, `no-suppress.mjs`. Any failure to evaluate a call blocks it; the suites assert
-  those paths.
+  `no-truncate.mjs`, `no-suppress.mjs`, `plan-identity.mjs`. Any failure to evaluate a call blocks
+  it; the suites assert those paths.
 - `scripts/hook-open <script>` (and `hook-open.cmd`) → **fails open, visibly** (exit 1 with a
   `systemMessage`). Wraps `freshness.mjs`, `house-rules.mjs`, `fetch-sanity.mjs`, `skill-arm.mjs`,
   `skill-check.mjs`, `audit-check.mjs`.
@@ -310,6 +311,25 @@ Laravel reads `composer.json` per root:
 
 Report unknowns as unknown: a closure binding yields `concrete: null` plus a `note`; a PSR-4 path
 that isn't on disk yields `exists: false` with the candidate path.
+
+### Plans: one store, identity from hooks only
+
+- `scripts/plan-store.mjs` is the only implementation of the plan format and lifecycle. Hooks import
+  it; `src/plans/tools.ts` imports it at runtime with types from `plan-store.d.mts`. Change the
+  `.d.mts` with every export; plans-test compares the two lists. It is a library and never reads a
+  payload (plugin-test asserts that). It is the only owner of the config file's `plans` section.
+- The MCP server has no reliable session identity: its `CLAUDE_CODE_SESSION_ID` keeps the startup id
+  after `/clear`, and it gets no `CLAUDE_PID` (verified on Claude Code 2.1.231 and 2.1.270). Every
+  `plan_*` call carries `_stackmap`, stamped by `plan-identity.mjs` from the hook payload; the server
+  refuses a call without it. Never read session identity from the server's environment.
+- `plan-identity.mjs` sets no `permissionDecision` (user decision): the user's permission prompts
+  apply to plan tools. `plan_resolve_task` is marked `_meta["anthropic/requiresUserInteraction"]`,
+  and it is the only tool that may set `not_needed`, `wont_deliver`, or `already_done` (user
+  decision: only after the user explicitly says so).
+- Refusals throw `PlanError` naming what is missing. A plan file that can't be read is listed in
+  `malformedFiles` and makes `get()` throw; a leftover `.tmp-*` write is reported too.
+- Opening a child plan requires the parent task to resume at; there is no default (user decision).
+  A handed-off plan closes only after its subagent delivers it (user decision).
 
 ### Note store: provenance and caching invariants
 
