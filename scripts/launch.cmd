@@ -11,7 +11,7 @@ if not exist "%ENTRY%" goto nobuild
 exit /b %ERRORLEVEL%
 
 :nonode
->&2 echo stackmap: no usable node binary found. Install Node 18+ from nodejs.org, or put node.exe on PATH.
+>&2 echo stackmap: no usable node binary found. Install Node 22.13+ from nodejs.org, or put node.exe on PATH.
 exit /b 1
 
 :nobuild
