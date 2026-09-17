@@ -7,5 +7,5 @@ if not defined NODE goto nonode
 exit /b %ERRORLEVEL%
 
 :nonode
->&2 echo sm: no usable node binary found. Install Node 18+.
+>&2 echo sm: no usable node binary found. Install Node 22.13+.
 exit /b 127
