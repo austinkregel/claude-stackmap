@@ -159,6 +159,21 @@ check("no .sh launcher remains", !["launch.sh", "guard.sh", "hook-open.sh"].some
 const gitattributes = read(".gitattributes");
 check(".gitattributes checks text out as LF, and .cmd as CRLF", /^\* text=auto eol=lf$/m.test(gitattributes) && /^\*\.cmd text eol=crlf$/m.test(gitattributes), gitattributes);
 
+console.log("\n-- ghidra export format --");
+{
+  // The script writes the export and src/adapters/ghidra reads it. Read both from source: this suite
+  // needs no build, and a version bumped on one side only would ship an export stackmap misreads.
+  const java = read("ghidra_scripts/StackmapExport.java");
+  const javaVersion = /^ {4}static final int FORMAT_VERSION = (\d+);$/m.exec(java)?.[1];
+  const tsVersion = /^export const FORMAT_VERSION = (\d+);$/m.exec(read("src/adapters/ghidra/format.ts"))?.[1];
+  check("the export script and the reader agree on FORMAT_VERSION", Boolean(javaVersion) && javaVersion === tsVersion, `script ${javaVersion}, reader ${tsVersion}`);
+  // stackmap never changes a Ghidra project: the script is run read-only and only writes its own file.
+  const mutators = ["setName(", "setNoReturn(", "setComment(", "createFunction(", "createData(", "clearListing(", "addEntryPoint(", "setDataType("];
+  const used = mutators.filter((m) => java.includes(m));
+  check("the export script calls nothing that would modify the program", used.length === 0, used.join(", "));
+  check("the export script is the only Java stackmap ships", readdirSync(join(root, "ghidra_scripts")).join() === "StackmapExport.java", readdirSync(join(root, "ghidra_scripts")).join());
+}
+
 console.log("\n-- manifest, agents, skills --");
 const plugin = JSON.parse(read(".claude-plugin/plugin.json"));
 check("plugin.json has no agents key (agents/ is auto-discovered)", !("agents" in plugin));
