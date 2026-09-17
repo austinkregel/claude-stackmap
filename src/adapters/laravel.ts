@@ -383,6 +383,8 @@ export const laravelFactory: AdapterFactory = {
       };
     });
     const adapter = new LaravelAdapter(states);
-    return { id: adapter.id, stats: () => adapter.stats(), resolve: adapter };
+    // Laravel answers symbol resolution only; the compiled-program capabilities are the Ghidra
+    // adapter's, and a tool that needs one fails naming this adapter rather than returning nothing.
+    return { id: adapter.id, stats: () => adapter.stats(), resolve: adapter, functions: null, types: null, xref: null };
   },
 };
