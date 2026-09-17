@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { addIndex, loadConfig, selectIndex, selectScope, configCandidates, duplicateCaveats, expandPath, type Config } from "./config.js";
 import { getAdapter, clearAdapterCache, detectAdapter, requireCapability, resolveRoots } from "./adapters/registry.js";
-import { acrossScope } from "./adapters/scope.js";
+import { acrossScope, acrossScopeAsync } from "./adapters/scope.js";
 import type { EdgeKind, ResolutionEdge } from "./adapters/types.js";
 import { existsSync } from "node:fs";
 import { NoteStore, type RootsLookup } from "./notes/store.js";
@@ -262,6 +262,62 @@ const TOOLS = [
         filter: { type: "string", description: "Case-insensitive substring matched against abstract, concrete, context, and declaring file." },
         limit: { type: "number", description: "Max rows to return (default 100)." },
         offset: { type: "number", description: "Rows to skip in the joined list, for paging (default 0)." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "stackmap_get_function",
+    description:
+      "A compiled function from a Ghidra project's export: its signature, decompiled pseudocode, callers, callees, data references, and optionally its disassembly. " +
+      "Every answer names the program and the root it came from. A function whose pseudocode is absent says why (the export records each decompile failure and timeout), and an export whose Ghidra project has been saved since is answered with a stale caveat — never silently. " +
+      "stackmap does not run Ghidra: the export is written by ghidra_scripts/StackmapExport.java, run by whoever owns the project.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...SCOPE_ARG,
+        name: { type: "string", description: "Function name. An exact match ranks first, then names containing it (Ghidra names carry namespaces and templates)." },
+        address: { type: "string", description: "Entry address, or any address inside the body, as hex (0x401080). Pass this or 'name', not both." },
+        limit: { type: "number", description: "Max functions per project (default 5; each carries its pseudocode)." },
+        disassembly: { type: "number", description: "Instructions of the body to include, from the entry (default 0 = none)." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "stackmap_get_type",
+    description:
+      "A type's memory layout from a Ghidra project's export: size, alignment, packing, and fields with their offsets, sizes, and bitfield positions. Nested by-value members carry their own layout. " +
+      "An anonymous member has no name, is marked `anonymous`, and holds its members in `layout` at offsets relative to the containing type. " +
+      "A program with no imported debug info (no PDB or DWARF) says so rather than returning an empty layout.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...SCOPE_ARG,
+        name: { type: "string", description: "Type name. An exact match ranks first, then names containing it. Pass this or 'path'." },
+        path: { type: "string", description: "Full type path as the export records it, e.g. /program.pdb/Header." },
+        limit: { type: "number", description: "Max types per project (default 5)." },
+        depth: { type: "number", description: "How many levels of nested by-value members to expand (default 1)." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "stackmap_xref",
+    description:
+      "Find where a constant or a string is used in a Ghidra project's export, with the surrounding disassembly. " +
+      "A string is matched exactly first, then as a case-insensitive substring, and is reached three ways: a reference to it, a data word holding its address (one pointer hop, which is how PPC64 reaches a string with no direct reference), and a reference to that word. " +
+      "A constant is matched against instruction operands, in decimal or hex, including a negative value's two's complement. " +
+      "Byte-pattern search is not offered: an export carries instructions, strings, pointers and types, not raw memory (user decision). " +
+      "The caveats state the pointer scan's blind spots.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...SCOPE_ARG,
+        constant: { type: "string", description: "A number in decimal (416) or hex (0x1a0). Pass this or 'string', not both." },
+        string: { type: "string", description: "Text to look for among the program's strings, defined or not." },
+        limit: { type: "number", description: "Max hits per project (default 50)." },
+        context: { type: "number", description: "Instructions of context on each side of a hit (default 2)." },
       },
       additionalProperties: false,
     },
@@ -549,6 +605,46 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         returned: Math.min(limit, Math.max(0, matched.length - offset)),
         edges: matched.slice(offset, offset + limit),
       });
+    }
+
+    /** Exactly one of two arguments, so a query can't silently mean something else. */
+    const oneOf = (tool: string, a: string, b: string): [string | undefined, string | undefined] => {
+      const first = stringArg(tool, a, args[a]);
+      const second = stringArg(tool, b, args[b]);
+      if ((first === undefined) === (second === undefined)) {
+        throw new Error(`${tool}: pass exactly one of '${a}' or '${b}'.`);
+      }
+      return [first, second];
+    };
+
+    if (req.params.name === "stackmap_get_function") {
+      const tool = "stackmap_get_function";
+      const [name, address] = oneOf(tool, "name", "address");
+      const limit = countArg(tool, "limit", args.limit, 5, 1);
+      const disassembly = countArg(tool, "disassembly", args.disassembly, 0, 0);
+      const results = await acrossScopeAsync(config, scope, (adapter, idx) =>
+        requireCapability(adapter, "functions", idx.name, tool).getFunction({ name, address, limit, context: disassembly }));
+      return text({ scope: scope.map((s) => s.name), caveats, results });
+    }
+
+    if (req.params.name === "stackmap_get_type") {
+      const tool = "stackmap_get_type";
+      const [name, path] = oneOf(tool, "name", "path");
+      const limit = countArg(tool, "limit", args.limit, 5, 1);
+      const depth = countArg(tool, "depth", args.depth, 1, 0);
+      const results = await acrossScopeAsync(config, scope, (adapter, idx) =>
+        requireCapability(adapter, "types", idx.name, tool).getType({ name, path, limit, depth }));
+      return text({ scope: scope.map((s) => s.name), caveats, results });
+    }
+
+    if (req.params.name === "stackmap_xref") {
+      const tool = "stackmap_xref";
+      const [constant, string] = oneOf(tool, "constant", "string");
+      const limit = countArg(tool, "limit", args.limit, 50, 1);
+      const context = countArg(tool, "context", args.context, 2, 0);
+      const results = await acrossScopeAsync(config, scope, (adapter, idx) =>
+        requireCapability(adapter, "xref", idx.name, tool).findRefs({ constant, string, limit, context }));
+      return text({ scope: scope.map((s) => s.name), caveats, results });
     }
 
     return failure(`stackmap: unknown tool "${req.params.name}".`);
