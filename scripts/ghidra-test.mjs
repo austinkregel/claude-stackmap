@@ -409,8 +409,12 @@ try {
     }
     check("exclude on a Ghidra alias is refused as well", /alias ~\/extra is a Ghidra project/.test(refused ?? ""), String(refused));
 
-    // Staleness reaches the answers: saving the program marks every answer from that export.
+    // Staleness reaches the answers, and is re-read per call: this adapter already answered above,
+    // and the program is saved in Ghidra only now.
     writeFileSync(join(main.dbDir, "db.5.gbf"), "saved in Ghidra");
+    const sameAdapter = await adapter.functions.getFunction({ name: "FUN_00401000", limit: 5, context: 0 });
+    check("an adapter that already answered notices the program being saved afterwards",
+      sameAdapter.caveats.some((c) => /was saved in Ghidra since this export was written/.test(c)), JSON.stringify(sameAdapter.caveats));
     const stale = ghidraFactory.create(cfg, roots);
     const staleAnswer = await stale.functions.getFunction({ name: "FUN_00401000", limit: 5, context: 0 });
     check("an answer from a stale export carries the reason in its caveats",
