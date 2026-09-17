@@ -77,7 +77,7 @@ function exportObject(overrides = {}) {
     }],
     instructions: [
       ["0x401000", "0x401000", "PUSH EBP", [], []],
-      ["0x401001", "0x401000", "MOV EAX,0x1a0", ["0x1a0"], [["0x402100", "READ"]]],
+      ["0x401001", "0x401000", "MOV EAX,0x1a0", ["0x1a0"], [["0x402000", "READ"]]],
     ],
     functions: [{
       name: "FUN_00401000", entry: "0x401000", size: 16, body: [["0x401000", "0x40100f"]],
@@ -156,7 +156,7 @@ try {
     check("body ranges and callees are stored", one("SELECT lo, hi FROM function_bodies").hi === "0x40100f" && one("SELECT callee FROM function_callees").callee === "0x401200");
     check("an instruction's scalars and references are queryable",
       one("SELECT scalar FROM instruction_scalars WHERE addr = ?", "0x401001").scalar === "0x1a0" &&
-      one("SELECT to_addr, ref_type FROM instruction_refs WHERE addr = ?", "0x401001").to_addr === "0x402100");
+      one("SELECT to_addr, ref_type FROM instruction_refs WHERE addr = ?", "0x401001").to_addr === "0x402000");
     check("an undefined string is marked as such and still queryable by value",
       one("SELECT address, defined FROM strings WHERE value = ?", "VZ.WAD").address === "0x402000" &&
       one("SELECT defined FROM strings WHERE value = ?", "VZ.WAD").defined === 0);
@@ -271,6 +271,150 @@ try {
     const noProject = await openIndex(writeExport("noproject", exportObject({ project: { location: join(sandbox, "missing/"), name: "missing", gpr: "x" } })));
     check("an export whose project is gone is 'unknown'", exportFreshness(noProject.meta, "noproject").state === "unknown");
     noProject.db.close();
+  }
+  console.log("\n-- the adapter over a project's roots --");
+  {
+    const { ghidraFactory } = await import(pathToFileURL(join(root, "dist/adapters/ghidra/adapter.js")).href);
+    const { detectAdapter } = await import(pathToFileURL(join(root, "dist/adapters/registry.js")).href);
+
+    /** A Ghidra project directory: a .gpr, its .rep (for staleness), and an export dir beside it. */
+    const ghidraRoot = (name, programs) => {
+      const p = project(name, { versions: [4] });
+      const dir = join(p.location, `${name}.stackmap`);
+      mkdirSync(dir, { recursive: true });
+      const stat = statSync(join(p.dbDir, "db.4.gbf"));
+      for (const [program, overrides] of Object.entries(programs)) {
+        const value = exportObject({
+          project: { location: p.location, name, gpr: `${p.location}${name}.gpr` },
+          program_database: { file_id: p.fileId, folder: "00/~00000000.db", file: "db.4.gbf", version: 4, size: stat.size, mtime_ms: stat.mtimeMs },
+          ...overrides,
+        });
+        value.program = { ...value.program, ...(overrides.program ?? {}), path: `/${program}`, name: program };
+        writeFileSync(join(dir, `${program}.json`), JSON.stringify(value, null, 1));
+      }
+      writeFileSync(join(p.location, `${name}.gpr`), "");
+      return p;
+    };
+
+    const main = ghidraRoot("main", { "one.exe": {} });
+    const alias = ghidraRoot("extra", {
+      "two.elf": {
+        // No types and no debug-info loader: the case a type lookup must report rather than answer empty.
+        types: [],
+        program: { info: { Analyzed: "true" } },
+        strings: [{ address: "0x500000", value: "SHARED.WAD", length: 11, type: null, defined: false }],
+        pointer_hits: [{ address: "0x600000", target: "0x500000", width: 4 }],
+        instructions: [["0x401000", "0x401000", "LWZ r3,0x0(r4)", [], [["0x600000", "READ"]]]],
+        functions: [{
+          name: "loader", entry: "0x401000", size: 8, body: [["0x401000", "0x401007"]], signature: "void loader(void)",
+          calling_convention: "default", noreturn: false, thunk_of: null, source: "USER_DEFINED", refs_to: [], callees: [],
+          computed_calls_unresolved: 0, decompile: "ok", pseudocode: "void loader(void) { }\n",
+        }],
+      },
+    });
+
+    check("a directory holding a .gpr is detected as a Ghidra project", detectAdapter(main.location).adapter === "ghidra", JSON.stringify(detectAdapter(main.location)));
+    check("…and detection says which project file it found", /found main\.gpr/.test(detectAdapter(main.location).notes.join()), JSON.stringify(detectAdapter(main.location).notes));
+    check("a directory with no .gpr is not a Ghidra project", ghidraFactory.detect(sandbox).matched === false);
+
+    const cfg = { name: "bin", root: main.location, adapter: "ghidra", options: {}, enabled: true, aliases: [] };
+    const roots = [
+      { kind: "root", configured: main.location, path: main.location, include: null, exclude: null },
+      { kind: "alias", configured: "~/extra", path: alias.location, include: null, exclude: null },
+    ];
+    const adapter = ghidraFactory.create(cfg, roots);
+    check("a Ghidra index provides functions, types and xref, but not symbol resolution",
+      adapter.resolve === null && Boolean(adapter.functions) && Boolean(adapter.types) && Boolean(adapter.xref));
+
+    const fn = await adapter.functions.getFunction({ name: "FUN_00401000", limit: 5, context: 2 });
+    check("a function is found by name, naming its program and root", fn.matches.length === 1 && fn.matches[0].program === "/one.exe" && fn.matches[0].root === main.location, JSON.stringify(fn.matches.map((m) => [m.program, m.name])));
+    check("…with its callers and callees resolved to names where the export knows them",
+      JSON.stringify(fn.matches[0].callers) === '[{"from":"0x401500","function":"0x401400","name":null}]' && JSON.stringify(fn.matches[0].callees) === '[{"entry":"0x401200","name":null}]',
+      JSON.stringify([fn.matches[0].callers, fn.matches[0].callees]));
+    check("…its data references apart from its calls", JSON.stringify(fn.matches[0].data_refs) === '[{"from":"0x404000","type":"DATA"}]', JSON.stringify(fn.matches[0].data_refs));
+    check("…and its disassembly in address order", JSON.stringify(fn.matches[0].disassembly.map((d) => d.address)) === '["0x401000","0x401001"]', JSON.stringify(fn.matches[0].disassembly));
+    const inside = await adapter.functions.getFunction({ address: "0x401008", limit: 5, context: 0 });
+    check("an address inside a body finds the function containing it", inside.matches.map((m) => m.entry).join() === "0x401000", JSON.stringify(inside.matches.map((m) => m.entry)));
+    const across = await adapter.functions.getFunction({ name: "loader", limit: 5, context: 0 });
+    check("a function in an alias root is found and attributed to that alias", across.matches.length === 1 && across.matches[0].root === "~/extra" && across.matches[0].program === "/two.elf", JSON.stringify(across.matches.map((m) => [m.root, m.program])));
+    const none = await adapter.functions.getFunction({ name: "nothing_here", limit: 5, context: 0 });
+    check("a name that matches nothing returns no matches and says nothing was wrong", none.matches.length === 0 && none.total === 0);
+
+    const type = await adapter.types.getType({ name: "Header", limit: 5, depth: 1 });
+    check("a type is found by name, with its size and alignment", type.matches[0]?.size === 8 && type.matches[0]?.align === 4, JSON.stringify(type.matches[0]));
+    const [named, anon] = type.matches[0].fields;
+    check("a named member keeps its name and offset", named.name === "magic" && named.offset === 0 && named.anonymous === false, JSON.stringify(named));
+    check("an anonymous member is marked anonymous with no name", anon.name === null && anon.anonymous === true && anon.offset === 4, JSON.stringify(anon));
+    check("…and the type's caveats explain what an anonymous member is", type.matches[0].caveats.some((c) => /anonymous member has no name/.test(c)), JSON.stringify(type.matches[0].caveats));
+    check("a program with no debug types says so rather than answering empty",
+      type.caveats.some((c) => /\/two\.elf: this program has no imported debug types/.test(c)), JSON.stringify(type.caveats));
+
+    const str = await adapter.xref.findRefs({ string: "VZ.WAD", limit: 10, context: 1 });
+    check("a string reference is found through an instruction reference",
+      str.hits.some((h) => h.program === "/one.exe" && h.via === "reference (READ)" && h.address === "0x401001"), JSON.stringify(str.hits));
+    check("…and through one pointer hop, naming the width",
+      str.hits.some((h) => h.via === "pointer word (4 bytes)" && h.address === "0x403000"), JSON.stringify(str.hits.map((h) => h.via)));
+    check("…with the instruction and its neighbours as context",
+      str.hits.find((h) => h.address === "0x401001")?.context.map((c) => c.address).join() === "0x401000,0x401001", JSON.stringify(str.hits.find((h) => h.address === "0x401001")?.context));
+    check("the pointer scan's blind spot is stated", str.caveats.some((c) => /pointer words were scanned in \d+ initialized, non-executable block/.test(c)), JSON.stringify(str.caveats));
+    const hop = await adapter.xref.findRefs({ string: "SHARED.WAD", limit: 10, context: 0 });
+    check("an instruction that reads a pointer word is reported as reaching the string",
+      hop.hits.some((h) => h.via.includes("to the pointer word 0x600000") && h.address === "0x401000" && h.function?.name === "loader"), JSON.stringify(hop.hits.map((h) => h.via)));
+    const missing = await adapter.xref.findRefs({ string: "not-in-any-program", limit: 5, context: 0 });
+    check("a string no program holds is reported as absent per program", missing.hits.length === 0 && missing.caveats.filter((c) => /no string matching/.test(c)).length === 2, JSON.stringify(missing.caveats));
+
+    const constant = await adapter.xref.findRefs({ constant: "0x1a0", limit: 5, context: 0 });
+    check("a constant is found among instruction operands", constant.hits.length === 1 && constant.hits[0].address === "0x401001" && constant.hits[0].kind === "constant", JSON.stringify(constant.hits));
+    const decimal = await adapter.xref.findRefs({ constant: "416", limit: 5, context: 0 });
+    check("the same constant in decimal finds the same instruction", decimal.hits.map((h) => h.address).join() === "0x401001", JSON.stringify(decimal.hits.map((h) => h.address)));
+    const negative = await adapter.xref.findRefs({ constant: "-1", limit: 5, context: 0 });
+    check("a negative constant is also looked up as its two's complement", negative.total === 0 && negative.hits.length === 0);
+    let bad = null;
+    try {
+      await adapter.xref.findRefs({ constant: "not a number", limit: 5, context: 0 });
+    } catch (err) {
+      bad = err.message;
+    }
+    check("a constant that isn't a number is an error saying what to pass", /is not a number; pass a decimal/.test(bad ?? ""), String(bad));
+
+    const stats = adapter.stats();
+    check("stats count each root's programs and rows", stats.roots.length === 2 && stats.roots[0].functions === 1 && stats.roots[0].programs === "/one.exe" && stats.roots[1].programs === "/two.elf", JSON.stringify(stats.roots));
+    check("stats name the adapter and how many exports were opened", stats.adapter === "ghidra" && stats.exportsLoaded === 2);
+
+    // A root that is a Ghidra project with no export yet, and one that is not a project at all.
+    const bare = project("bare", { versions: [4] });
+    writeFileSync(join(bare.location, "bare.gpr"), "");
+    const noExport = ghidraFactory.create(cfg, [
+      { kind: "root", configured: bare.location, path: bare.location, include: null, exclude: null },
+      { kind: "alias", configured: "~/not-ghidra", path: sandbox, include: null, exclude: null },
+    ]);
+    const empty = await noExport.functions.getFunction({ name: "anything", limit: 5, context: 0 });
+    check("a project with no export says which script to run rather than answering empty",
+      empty.caveats.some((c) => /bare\.gpr has no export in bare\.stackmap\/. Run ghidra_scripts\/StackmapExport\.java/.test(c)), JSON.stringify(empty.caveats));
+    check("a root that is not a Ghidra project directory is reported too",
+      empty.caveats.some((c) => /~\/not-ghidra: no \.gpr file/.test(c)), JSON.stringify(empty.caveats));
+
+    let refused = null;
+    try {
+      ghidraFactory.create({ ...cfg, include: ["app"] }, roots);
+    } catch (err) {
+      refused = err.message;
+    }
+    check("include on a Ghidra index is refused, since there is no source to scan", /is a Ghidra project, so "include" does not apply/.test(refused ?? ""), String(refused));
+    refused = null;
+    try {
+      ghidraFactory.create({ ...cfg, aliases: [{ path: "~/extra", exclude: ["x"] }] }, roots);
+    } catch (err) {
+      refused = err.message;
+    }
+    check("exclude on a Ghidra alias is refused as well", /alias ~\/extra is a Ghidra project/.test(refused ?? ""), String(refused));
+
+    // Staleness reaches the answers: saving the program marks every answer from that export.
+    writeFileSync(join(main.dbDir, "db.5.gbf"), "saved in Ghidra");
+    const stale = ghidraFactory.create(cfg, roots);
+    const staleAnswer = await stale.functions.getFunction({ name: "FUN_00401000", limit: 5, context: 0 });
+    check("an answer from a stale export carries the reason in its caveats",
+      staleAnswer.matches.length === 1 && staleAnswer.caveats.some((c) => /was saved in Ghidra since this export was written/.test(c)), JSON.stringify(staleAnswer.caveats));
   }
 } finally {
   rmSync(sandbox, { recursive: true, force: true });
