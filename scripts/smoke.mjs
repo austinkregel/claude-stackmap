@@ -95,6 +95,7 @@ const config = {
   ],
   defaultIndex: "fixture",
   notesDir: join(sandbox, "notes"),
+  plans: { dir: join(sandbox, "plans") },
 };
 writeFileSync(configPath, JSON.stringify(config));
 
@@ -102,8 +103,16 @@ try {
   console.log("-- tools --");
   const { client, call } = await connect({ STACKMAP_CONFIG: configPath });
   try {
-    const names = (await client.listTools()).tools.map((t) => t.name).sort().join();
-    check("lists all ten tools", names === "note_get,note_query,note_schemas,note_search,note_supersede,note_write,stackmap_add_index,stackmap_bindings,stackmap_indexes,stackmap_resolve", names);
+    const listed = (await client.listTools()).tools;
+    const names = listed.map((t) => t.name).sort().join();
+    check("lists all twenty tools", names === [
+      "note_get", "note_query", "note_schemas", "note_search", "note_supersede", "note_write",
+      "plan_add_task", "plan_close", "plan_create", "plan_create_child", "plan_get", "plan_list", "plan_resolve_task", "plan_select", "plan_status", "plan_update_task",
+      "stackmap_add_index", "stackmap_bindings", "stackmap_indexes", "stackmap_resolve",
+    ].join(), names);
+    const interactive = listed.filter((t) => t._meta?.["anthropic/requiresUserInteraction"] === true).map((t) => t.name);
+    check("only plan_resolve_task always asks the user", interactive.join() === "plan_resolve_task", interactive.join());
+    check("every plan tool declares the _stackmap stamp", listed.filter((t) => t.name.startsWith("plan_")).every((t) => t.inputSchema.properties?._stackmap?.type === "object"));
 
     console.log("\n-- stackmap_indexes --");
     let r = await call("stackmap_indexes");
@@ -225,6 +234,89 @@ try {
     check("note_query rejects a non-numeric limit", r.isError && /'limit' must be a number/.test(r.text), r.show);
     r = await call("note_write", { id: "../outside", title: "x", body: "y" });
     check("a note id that leaves the notes directory is an error", r.isError && /is not allowed/.test(r.text), r.show);
+
+    console.log("\n-- plans --");
+    {
+      const me = { session_id: "smoke-session", agent_id: null, agent_type: null, cwd: repo, transcript_path: join(sandbox, "t.jsonl"), transcript_uuid: null };
+      const as = (who) => ({ _stackmap: who });
+      r = await call("plan_status");
+      check("a plan tool without the hook's stamp is refused, naming the hook", r.isError && /no _stackmap identity/.test(r.text) && /plan-identity hook/.test(r.text), r.show);
+      r = await call("plan_status", { _stackmap: { ...me, extra: 1 } });
+      check("a stamp with an unknown key is refused", r.isError && /unknown key\(s\) extra/.test(r.text), r.show);
+      r = await call("plan_status", as(me));
+      check("plan_status with no plans: nothing active, in the configured directory", r.body?.active === null && r.body?.plansDir === config.plans.dir && r.body?.malformedFiles?.length === 0, r.show);
+
+      r = await call("plan_create", { ...as(me), title: "Ship payments", deliverable: { kind: "in-place" }, tasks: ["wire stripe", "add tests"] });
+      const rootId = r.body?.created;
+      check("plan_create makes an active root plan", Boolean(rootId) && r.body?.plan?.status === "active" && r.body.plan.tasks.length === 2, r.show);
+      r = await call("plan_create", { ...as(me), title: "Second", deliverable: { kind: "in-place" } });
+      check("a second root plan in the session is refused", r.isError && /already has active plan/.test(r.text), r.show);
+      r = await call("plan_create", { ...as({ ...me, session_id: "s2" }), title: "Bad", deliverable: "in-place" });
+      check("a deliverable that isn't an object is an error showing the value", r.isError && /'deliverable' must be an object, got "in-place"/.test(r.text), r.show);
+      r = await call("plan_create_child", { ...as(me), title: "Investigate webhook retries", deliverable: { kind: "in-place" } });
+      check("plan_create_child without from_task is refused before anything is written", r.isError && /requires 'from_task'/.test(r.text), r.show);
+      r = await call("plan_create_child", { ...as(me), title: "Investigate webhook retries", from_task: "t1", deliverable: { kind: "in-place" }, tasks: ["read the retry code"] });
+      const childId = r.body?.created;
+      check("plan_create_child pauses the parent at the named task", r.body?.paused?.id === rootId && r.body?.paused?.resume_at === "t1", r.show);
+      r = await call("plan_status", as(me));
+      check("plan_status shows the child active, with its parent chain", r.body?.active?.id === childId && r.body.active.ancestors?.[0]?.id === rootId && r.body.active.ancestors[0].resume_at === "t1" && r.body.paused?.[0]?.id === rootId, r.show);
+
+      r = await call("plan_add_task", { ...as(me), id: childId, tasks: ["write up findings"] });
+      check("plan_add_task appends", r.body?.added?.join() === "t2", r.show);
+      r = await call("plan_update_task", { ...as(me), id: childId, task: "t1", state: "done" });
+      check("done without evidence is refused", r.isError && /needs evidence/.test(r.text), r.show);
+      r = await call("plan_update_task", { ...as(me), id: childId, task: "t1", state: "not_needed" });
+      check("plan_update_task refuses the user-only states", r.isError && /must be one of todo, doing, done/.test(r.text), r.show);
+      r = await call("plan_update_task", { ...as(me), id: childId, task: "t1", state: "done", evidence: "retry code read: src/Webhooks.php" });
+      check("done with evidence is recorded", r.body?.task?.state === "done" && r.body?.openTasks?.map((t) => t.id).join() === "t2", r.show);
+
+      r = await call("plan_resolve_task", { ...as(me), id: childId, tasks: ["t2"], state: "not_needed", reason: "covered", user_quote: "skip the write-up" });
+      check("plan_resolve_task without the hook's transcript record is refused", r.isError && /can't be verified/.test(r.text), r.show);
+      r = await call("plan_resolve_task", { ...as({ ...me, transcript_uuid: "uuid-7" }), id: childId, tasks: ["t2"], state: "done", reason: "covered", user_quote: "skip the write-up" });
+      check("plan_resolve_task refuses done", r.isError && /must be one of not_needed/.test(r.text), r.show);
+      r = await call("plan_resolve_task", { ...as({ ...me, transcript_uuid: "uuid-7" }), id: childId, tasks: ["t2"], state: "not_needed", reason: "covered", user_quote: "skip the write-up" });
+      check("plan_resolve_task records the state with the stamped transcript uuid", r.body?.resolved?.join() === "t2" && r.body?.openTasks?.length === 0, r.show);
+      r = await call("plan_get", { ...as(me), id: childId });
+      check("plan_get returns the record with the resolution", r.body?.plan?.tasks?.[1]?.resolution?.transcript_uuid === "uuid-7" && r.body.ancestors?.[0]?.id === rootId, r.show);
+
+      r = await call("plan_close", { ...as(me), id: rootId, summary: "x" });
+      check("the parent can't close while its child is open", r.isError && new RegExp(`open child plans: ${childId}`).test(r.text), r.show);
+      r = await call("plan_close", { ...as(me), id: childId, summary: "retries are fine" });
+      check("closing the child resumes the parent at its task", r.body?.closed === childId && r.body?.resumed?.plan === rootId && r.body.resumed.task === "t1", r.show);
+
+      const other = { ...me, session_id: "other-session" };
+      r = await call("plan_select", { ...as(other), id: rootId });
+      check("another session can't select an owned plan without take_over", r.isError && /owned by session smoke-session/.test(r.text), r.show);
+      r = await call("plan_select", { ...as(other), id: rootId, take_over: "yes" });
+      check("take_over must be a boolean", r.isError && /'take_over' must be true or false, got "yes"/.test(r.text), r.show);
+      r = await call("plan_select", { ...as(other), id: rootId, take_over: true });
+      check("take_over moves the plan to the new session", r.body?.active === rootId && r.body?.takenOverFrom === "smoke-session", r.show);
+      r = await call("plan_update_task", { ...as(me), id: rootId, task: "t2", state: "doing" });
+      check("the old session's write is refused, naming the new owner", r.isError && /owned by session other-session/.test(r.text), r.show);
+
+      r = await call("plan_list", as(me));
+      check("plan_list leaves closed plans out by default", r.body?.matched === 1 && r.body.plans[0].id === rootId, r.show);
+      r = await call("plan_list", { ...as(me), status: ["closed"] });
+      check("plan_list returns closed plans when asked", r.body?.matched === 1 && r.body.plans[0].id === childId, r.show);
+      r = await call("plan_list", { ...as(me), status: ["done"] });
+      check("an unknown status is an error", r.isError && /unknown status "done"/.test(r.text), r.show);
+      r = await call("plan_list", { ...as(me), under: rootId, status: ["closed", "active"] });
+      check("plan_list under a plan finds its descendants only", r.body?.plans?.map((p) => p.id).join() === childId, r.show);
+      r = await call("plan_list", { ...as(me), owner: "me" });
+      check("owner \"me\" is the calling session", r.body?.matched === 0, r.show);
+      r = await call("plan_list", { ...as(me), under: "no-such-plan" });
+      check("plan_list under an unknown plan is an error, not an empty list", r.isError && /no plan "no-such-plan"/.test(r.text), r.show);
+      r = await call("plan_list", { ...as(me), sort: "id" });
+      check("an undeclared plan_list argument is an error", r.isError && /unknown argument "sort"/.test(r.text), r.show);
+
+      writeFileSync(join(config.plans.dir, "broken.json"), "{nope");
+      r = await call("plan_status", as(other));
+      check("an unreadable plan file is reported, not skipped", r.body?.malformedFiles?.some((m) => m.file.endsWith("broken.json")), r.show);
+      writeFileSync(configPath, JSON.stringify({ ...JSON.parse(readFileSync(configPath, "utf8")), plans: { dir: "relative/plans" } }));
+      r = await call("plan_status", as(other));
+      check("an invalid plans section is an error naming it", r.isError && /plans\.dir: must be absolute/.test(r.text), r.show);
+      writeFileSync(configPath, JSON.stringify({ ...JSON.parse(readFileSync(configPath, "utf8")), plans: config.plans }));
+    }
 
     console.log("\n-- notesDir change --");
     const movedNotes = join(sandbox, "notes-moved");
