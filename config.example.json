@@ -81,5 +81,8 @@
     "files": [],
     "disable": []
   },
-  "notesDir": "~/.config/stackmap/notes"
+  "notesDir": "~/.config/stackmap/notes",
+  "plans": {
+    "dir": "~/.config/stackmap/plans"
+  }
 }
