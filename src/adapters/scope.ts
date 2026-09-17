@@ -15,3 +15,24 @@ export function acrossScope<T>(config: Config, scope: IndexConfig[], query: (ada
     }
   });
 }
+
+/**
+ * The same, for capabilities that answer asynchronously (a Ghidra export is indexed on first use).
+ * Projects are queried in scope order rather than together, so one project's index build can't be
+ * blamed on another's.
+ */
+export async function acrossScopeAsync<T>(
+  config: Config,
+  scope: IndexConfig[],
+  query: (adapter: IndexedAdapter, idx: IndexConfig) => Promise<T>,
+): Promise<ProjectOutcome<T>[]> {
+  const out: ProjectOutcome<T>[] = [];
+  for (const idx of scope) {
+    try {
+      out.push({ index: idx.name, value: await query(getAdapter(config, idx), idx) });
+    } catch (err) {
+      out.push({ index: idx.name, error: (err as Error).message });
+    }
+  }
+  return out;
+}
