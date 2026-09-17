@@ -45,6 +45,7 @@ node scripts/cli-test.mjs           # every sm subcommand through bin/sm: output
 node scripts/config-test.mjs        # config resolution, per-entry validation, scope, detection, roots, cache, addIndex  (needs dist/)
 node scripts/extract-test.mjs       # PHP extractors + adapter wiring, several roots, inline fixtures  (needs dist/)
 node scripts/notes-test.mjs         # note store: supersession, drift, stamps across roots, file format, typed notes, note_query, tokenizer  (needs dist/)
+node scripts/plans-test.mjs         # plan store: plans config section, record validation, nesting, ownership, final states, closing
 node scripts/smoke.mjs              # every MCP tool over stdio: scope, aliases, duplicates, add-index, typed notes, notesDir change, plus a no-config server  (needs dist/)
 ```
 
