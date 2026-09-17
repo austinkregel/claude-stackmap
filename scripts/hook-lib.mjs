@@ -53,6 +53,14 @@ export function deny(reason) {
   process.exitCode = 2;
 }
 
+/**
+ * PreToolUse: replace the tool's whole input. No permissionDecision is set, so the user's normal
+ * permission rules and prompts still apply to the call.
+ */
+export function replaceToolInput(updatedInput) {
+  emit({ hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput } });
+}
+
 /** Stop: block the turn from ending, in the documented top-level `decision` shape. */
 export function blockStop(reason) {
   emit({ decision: "block", reason });
