@@ -68,6 +68,10 @@ try {
       const err = thrown(() => S.plansDir());
       check(`${label}: a ConfigError naming it, never the default`, err instanceof ConfigError && pattern.test(err.message), err?.message ?? "(no error)");
     }
+    process.env.STACKMAP_CONFIG = join(scripts, "..", "config.example.json");
+    const fromExample = thrown(() => S.plansDir()) ?? S.plansDir();
+    check("config.example.json's plans section is valid", fromExample === join(home, ".config", "stackmap", "plans"), String(fromExample));
+    process.env.STACKMAP_CONFIG = join(sandbox, "config.json");
     cfg({});
   }
 
