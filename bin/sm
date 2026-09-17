@@ -5,7 +5,7 @@ set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 . "$ROOT/scripts/find-node.sh"
 if ! NODE=$(find_node); then
-  echo "sm: no usable node binary found. Install Node 18+." >&2
+  echo "sm: no usable node binary found. Install Node 22.13+." >&2
   exit 127
 fi
 exec "$NODE" "$ROOT/scripts/cli/main.mjs" "$@"
