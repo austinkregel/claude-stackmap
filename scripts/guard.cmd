@@ -28,7 +28,7 @@ if not exist "%~dp0%NAME%" goto block
 set "WHY=cannot load node resolution"
 if not exist "%~dp0find-node.cmd" goto block
 call "%~dp0find-node.cmd"
-set "WHY=no usable node binary; install Node 18.17+"
+set "WHY=no usable node binary; install Node 22.13+"
 if not defined NODE goto block
 "%NODE%" "%~dp0%NAME%"
 exit /b %ERRORLEVEL%
