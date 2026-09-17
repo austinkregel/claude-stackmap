@@ -21,7 +21,7 @@ const check = (label, cond, detail = "") => {
 };
 
 /** Scripts that fail closed; everything else fails open. */
-const GUARDS = ["guard.mjs", "no-truncate.mjs", "no-suppress.mjs"];
+const GUARDS = ["guard.mjs", "no-truncate.mjs", "no-suppress.mjs", "plan-identity.mjs"];
 const EVENTS = ["PreToolUse", "PostToolUse", "SessionStart", "SubagentStart", "SubagentStop", "UserPromptSubmit", "Stop"];
 /** Exec form: the extensionless launcher, which is the sh file on macOS/Linux and resolves to its .cmd twin on Windows. */
 const COMMAND = /^\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/(guard|hook-open)$/;
@@ -106,6 +106,18 @@ if (audit?.matcher) {
   const re = new RegExp(audit.matcher);
   check("the audit-check matcher matches the auditor exactly", re.test(AUDITOR_AGENT) && !re.test(`${AUDITOR_AGENT}-2`) && !re.test("Explore") && !re.test(`x${AUDITOR_AGENT}`), audit.matcher);
 }
+
+const identity = entries.filter((e) => e.script === "plan-identity.mjs");
+check("plan-identity runs once, before a tool call", identity.length === 1 && identity[0].event === "PreToolUse", JSON.stringify(identity));
+if (identity[0]?.matcher) {
+  const re = new RegExp(identity[0].matcher);
+  const pluginName = JSON.parse(read(".claude-plugin/plugin.json")).name;
+  const toolName = (tool) => `mcp__plugin_${pluginName}_stackmap__${tool}`;
+  check("the plan-identity matcher covers every plan tool of this plugin's server and nothing else",
+    re.test(toolName("plan_status")) && re.test(toolName("plan_resolve_task")) && !re.test(toolName("note_get")) && !re.test("mcp__plugin_other_stackmap__plan_status") && !re.test(`x${toolName("plan_status")}`),
+    identity[0].matcher);
+}
+check("plan-store.mjs is a library, not a hook (never reads a payload)", !/readPayload/.test(read("scripts/plan-store.mjs")));
 
 console.log("\n-- launchers --");
 // Git records the executable bit, so it's read from the index: that works on a Windows checkout too.
