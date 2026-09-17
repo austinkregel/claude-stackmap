@@ -23,6 +23,19 @@
         ]
       },
       {
+        "matcher": "^mcp__plugin_stackmap_stackmap__plan_",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/guard",
+            "args": [
+              "plan-identity.mjs"
+            ],
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "^(?:Edit|Write|NotebookEdit)$",
         "hooks": [
           {
