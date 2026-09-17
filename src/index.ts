@@ -12,6 +12,10 @@ import { noteWrite, noteSearch, noteGet, noteSupersede, noteQuery, noteSchemas }
 import { NOTE_SCHEMAS } from "./notes/schemas.js";
 import { countArg, stringArg } from "./args.js";
 import { COMPARATORS } from "./notes/query.js";
+import { openStore } from "../scripts/plan-store.mjs";
+import {
+  planAddTask, planClose, planCreate, planCreateChild, planGet, planList, planResolveTask, planSelect, planStatus, planUpdateTask,
+} from "./plans/tools.js";
 
 const SCOPE_ARG = {
   scope: {
@@ -22,7 +26,174 @@ const SCOPE_ARG = {
   },
 } as const;
 
+/** Declared on every plan_* tool so the hook's stamp passes argument checking. Never set it yourself. */
+const STAMP_ARG = {
+  _stackmap: {
+    type: "object",
+    description: "Caller identity, set by the stackmap plan-identity hook on every call. Do not set it; any value you pass is replaced.",
+  },
+} as const;
+
+const DELIVERABLE_ARG = {
+  type: "object",
+  description:
+    'What closing the plan produces: {"kind": "in-place"} for changes in the working copy; {"kind": "document", "path": "<absolute path>"} for a file for the user; ' +
+    '{"kind": "branch", "repo": "<absolute repo path>", "base": "<ref the work starts from>", "branch": "<name>" | null} for a feature branch. Checked when the plan closes.',
+} as const;
+
+const PLAN_TOOLS = [
+  {
+    name: "plan_status",
+    description:
+      "This session's plans: the active plan with its open tasks, the parent plans above it (each with the task it resumes at), open child plans, and plans that are paused, delivered, or drafts. " +
+      "The plan records are the source of truth; check this instead of relying on memory of the conversation.",
+    inputSchema: { type: "object", properties: { ...STAMP_ARG }, additionalProperties: false },
+  },
+  {
+    name: "plan_create",
+    description: "Create a root plan and make it this session's active plan. Refused when the session already has an active plan: open a child with plan_create_child instead.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...STAMP_ARG,
+        title: { type: "string", description: "What the plan delivers." },
+        deliverable: DELIVERABLE_ARG,
+        tasks: { type: "array", items: { type: "string" }, description: "Steps, in order. More can be added with plan_add_task." },
+        projects: { type: "array", items: { type: "string" }, description: "stackmap project names the plan touches." },
+      },
+      required: ["title", "deliverable"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "plan_create_child",
+    description:
+      "Open a child plan when something discovered mid-plan deserves its own plan. The active plan is paused at 'from_task' and becomes active again when the child closes. " +
+      "Use this instead of silently widening the current plan's scope.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...STAMP_ARG,
+        title: { type: "string", description: "What the child plan delivers." },
+        from_task: { type: "string", description: "The active plan's task (e.g. t3) to resume at when the child closes. Required." },
+        deliverable: DELIVERABLE_ARG,
+        tasks: { type: "array", items: { type: "string" } },
+        projects: { type: "array", items: { type: "string" } },
+      },
+      required: ["title", "from_task", "deliverable"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "plan_select",
+    description:
+      "Make a plan this session's active plan; the currently active one is paused. A plan owned by another session moves here only with take_over: true, and then its whole open tree (parents and children) moves with it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...STAMP_ARG,
+        id: { type: "string" },
+        take_over: { type: "boolean", description: "Take ownership from another session (default false)." },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "plan_get",
+    description: "Fetch one plan's full record, with its parent plans.",
+    inputSchema: { type: "object", properties: { ...STAMP_ARG, id: { type: "string" } }, required: ["id"], additionalProperties: false },
+  },
+  {
+    name: "plan_list",
+    description: "List plans, newest state per file, sorted by id. Closed plans are left out unless 'status' names closed. Unreadable plan files are listed in 'malformedFiles'.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...STAMP_ARG,
+        status: { type: "array", items: { type: "string", enum: ["draft", "active", "paused", "delivered", "closed"] } },
+        project: { type: "string", description: "Only plans that list this project." },
+        owner: { type: "string", description: 'A session id, or "me" for this session.' },
+        under: { type: "string", description: "Only plans below this plan id (children, grandchildren, …)." },
+        limit: { type: "number", description: "Max plans (default 50)." },
+        offset: { type: "number", description: "Plans to skip, for paging (default 0)." },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "plan_add_task",
+    description: "Add tasks to a plan you own, at the end or after a given task. Record every step here rather than only in the conversation.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...STAMP_ARG,
+        id: { type: "string", description: "Plan id." },
+        tasks: { type: "array", items: { type: "string" }, minItems: 1 },
+        after: { type: "string", description: "Insert after this task id; default is the end." },
+      },
+      required: ["id", "tasks"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "plan_update_task",
+    description:
+      "Change a task's text, or move it between todo, doing, and done. Done needs 'evidence' (a test run, a commit sha, a file). " +
+      "Final states other than done (not_needed, wont_deliver, already_done) go through plan_resolve_task, and only after the user says so.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...STAMP_ARG,
+        id: { type: "string", description: "Plan id." },
+        task: { type: "string", description: "Task id, e.g. t2." },
+        text: { type: "string" },
+        state: { type: "string", enum: ["todo", "doing", "done"] },
+        evidence: { type: "string", description: "Required with state done." },
+      },
+      required: ["id", "task"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "plan_resolve_task",
+    description:
+      "Mark tasks not_needed, wont_deliver, or already_done. Only after discussing it with the user and the user explicitly saying so: " +
+      "'user_quote' must be the user's own words from this session, copied exactly, and the user is asked to approve every call. Never call this on your own initiative.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...STAMP_ARG,
+        id: { type: "string", description: "Plan id." },
+        tasks: { type: "array", items: { type: "string" }, minItems: 1, description: "Task ids; all get the same state and reason." },
+        state: { type: "string", enum: ["not_needed", "wont_deliver", "already_done"] },
+        reason: { type: "string", description: "Why, in a sentence." },
+        user_quote: { type: "string", description: "The user's words authorizing this, copied exactly from their message." },
+      },
+      required: ["id", "tasks", "state", "reason", "user_quote"],
+      additionalProperties: false,
+    },
+    _meta: { "anthropic/requiresUserInteraction": true },
+  },
+  {
+    name: "plan_close",
+    description:
+      "Close a plan. Refused while any task isn't final, any child plan is open, or the deliverable doesn't exist. When a child plan closes, its parent becomes active again at the task it was paused on.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...STAMP_ARG,
+        id: { type: "string" },
+        summary: { type: "string", description: "What the plan delivered." },
+      },
+      required: ["id", "summary"],
+      additionalProperties: false,
+    },
+  },
+] as const;
+
 const TOOLS = [
+  ...PLAN_TOOLS,
   {
     name: "stackmap_indexes",
     description:
@@ -254,6 +425,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         resolveRoots({ name: args.name, root: args.root, adapter: "auto", options: {}, enabled: true, aliases: Array.isArray(args.aliases) ? args.aliases : [] });
       }
       return text(addIndex(entry));
+    }
+
+    if (req.params.name.startsWith("plan_")) {
+      // The store reads its own config section on every call, so a changed plans.dir takes effect at once.
+      const plans = openStore();
+      if (req.params.name === "plan_status") return text(planStatus(plans, args));
+      if (req.params.name === "plan_create") return text(planCreate(plans, args));
+      if (req.params.name === "plan_create_child") return text(planCreateChild(plans, args));
+      if (req.params.name === "plan_select") return text(planSelect(plans, args));
+      if (req.params.name === "plan_get") return text(planGet(plans, args));
+      if (req.params.name === "plan_list") return text(planList(plans, args));
+      if (req.params.name === "plan_add_task") return text(planAddTask(plans, args));
+      if (req.params.name === "plan_update_task") return text(planUpdateTask(plans, args));
+      if (req.params.name === "plan_resolve_task") return text(planResolveTask(plans, args));
+      if (req.params.name === "plan_close") return text(planClose(plans, args));
     }
 
     const { config, path } = loadConfig();
