@@ -25,5 +25,5 @@ esac
 SCRIPT="$ROOT/scripts/$NAME"
 [ -f "$SCRIPT" ] || block "$SCRIPT missing"
 . "$ROOT/scripts/find-node.sh" 2>/dev/null || block "cannot load node resolution"
-NODE=$(find_node) || block "no usable node binary; install Node 18.17+"
+NODE=$(find_node) || block "no usable node binary; install Node 22.13+"
 exec "$NODE" "$SCRIPT"
