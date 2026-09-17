@@ -9,7 +9,7 @@
  */
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,6 +85,60 @@ write(pkg, "src/Providers/LedgerProvider.php", "<?php\nnamespace Pkg\\Providers;
 write(otherRepo, "composer.json", LARAVEL({ "Other\\": "app/" }));
 write(otherRepo, "app/Providers/OtherProvider.php", "<?php\nnamespace Other\\Providers;\nclass OtherProvider { public function register(): void { $this->app->bind(\\Other\\A::class, \\Other\\B::class); } }\n");
 
+// A Ghidra project as the adapter reads one: a .gpr, the program database its staleness check reads,
+// and one export written by hand (stackmap never runs Ghidra, so a fixture is just JSON).
+const ghidraRoot = join(sandbox, "bin-project");
+{
+  const db = join(ghidraRoot, "binaries.rep", "idata", "00", "~00000000.db");
+  mkdirSync(db, { recursive: true });
+  writeFileSync(join(db, "db.7.gbf"), "program database");
+  write(ghidraRoot, "binaries.rep/idata/~index.dat", "VERSION=1\n/\n  00000000:game.exe:fileid7\nNEXT-ID:1\nMD5:d41d8cd98f00b204e9800998ecf8427e\n");
+  write(ghidraRoot, "binaries.gpr", "");
+  const stat = statSync(join(db, "db.7.gbf"));
+  write(ghidraRoot, "binaries.stackmap/game.exe.json", JSON.stringify({
+    format_version: 2,
+    exporter: { script: "StackmapExport", ghidra_version: "12.1.3", exported_at: "2026-09-17T00:00:00Z", decompile_timeout_seconds: 60 },
+    project: { location: `${ghidraRoot}/`, name: "binaries", gpr: join(ghidraRoot, "binaries.gpr") },
+    program_database: { file_id: "fileid7", folder: "00/~00000000.db", file: "db.7.gbf", version: 7, size: stat.size, mtime_ms: stat.mtimeMs },
+    program: {
+      path: "/game.exe", name: "game.exe", executable_path: "C:/game.exe", executable_format: "Portable Executable (PE)",
+      language: "x86:LE:32:default", compiler: "windows", image_base: "0x400000", pointer_size: 4, big_endian: false,
+      info: { Analyzed: "true", "PDB Loaded": "true" },
+    },
+    memory_blocks: [{ name: ".text", start: "0x401000", end: "0x401fff", size: 4096, read: true, write: false, execute: true, initialized: true, overlay: false }],
+    undefined_string_min_length: 4,
+    strings: [{ address: "0x402000", value: "SAVE.WAD", length: 9, type: null, defined: false }],
+    pointer_scan: { widths: [4], blocks_scanned: [".data"] },
+    pointer_hits: [{ address: "0x403000", target: "0x402000", width: 4 }],
+    types: [{
+      path: "/game.pdb/SaveHeader", name: "SaveHeader", kind: "struct", size: 12, zero_length: false, alignment: 4,
+      packing_enabled: true, explicit_packing: -1, description: null, source_archive: "game.exe",
+      fields: [
+        { name: "magic", offset: 0, size: 4, type: "uint", type_path: "/uint", comment: null },
+        { name: "flags", offset: 4, size: 1, type: "uint", type_path: "/uint", bit_offset: 0, bit_size: 3, comment: null },
+        { name: null, offset: 8, size: 4, type: "Slot", type_path: "/game.pdb/SaveHeader/Slot", comment: "anonymous union" },
+      ],
+    }, {
+      path: "/game.pdb/SaveHeader/Slot", name: "Slot", kind: "union", size: 4, zero_length: false, alignment: 4,
+      packing_enabled: true, explicit_packing: -1, description: null, source_archive: "game.exe",
+      fields: [{ name: "index", offset: 0, size: 4, type: "uint", type_path: "/uint", comment: null }],
+    }],
+    instructions: [
+      ["0x401000", "0x401000", "PUSH EBP", [], []],
+      ["0x401001", "0x401000", "MOV EAX,0x1a0", ["0x1a0"], []],
+      ["0x401006", "0x401000", "PUSH 0x402000", [], [["0x402000", "DATA"]]],
+    ],
+    functions: [{
+      name: "load_save", entry: "0x401000", size: 16, body: [["0x401000", "0x40100f"]], signature: "int load_save(char *)",
+      calling_convention: "__cdecl", noreturn: false, thunk_of: null, source: "IMPORTED",
+      refs_to: [["0x401500", "0x401400", "UNCONDITIONAL_CALL", true]], callees: [], computed_calls_unresolved: 2,
+      decompile: "ok", pseudocode: "int load_save(char *path)\n{\n  return 0;\n}\n",
+    }],
+    counts: { functions: 1, function_bytes: 16, decompiled: 1, decompile_failed: 0, decompile_timeout: 0 },
+    export_seconds: 0.2,
+  }));
+}
+
 const configPath = join(sandbox, "config.json");
 const config = {
   guard: { enabled: true },
@@ -92,6 +146,7 @@ const config = {
     { name: "fixture", root: repo, aliases: [{ path: pkg, include: ["src"] }] },
     { name: "other", root: otherRepo },
     { name: "fixture", root: otherRepo },
+    { name: "binary", root: ghidraRoot },
   ],
   defaultIndex: "fixture",
   notesDir: join(sandbox, "notes"),
@@ -105,10 +160,10 @@ try {
   try {
     const listed = (await client.listTools()).tools;
     const names = listed.map((t) => t.name).sort().join();
-    check("lists all twenty tools", names === [
+    check("lists all twenty-three tools", names === [
       "note_get", "note_query", "note_schemas", "note_search", "note_supersede", "note_write",
       "plan_add_task", "plan_close", "plan_create", "plan_create_child", "plan_get", "plan_list", "plan_resolve_task", "plan_select", "plan_status", "plan_update_task",
-      "stackmap_add_index", "stackmap_bindings", "stackmap_indexes", "stackmap_resolve",
+      "stackmap_add_index", "stackmap_bindings", "stackmap_get_function", "stackmap_get_type", "stackmap_indexes", "stackmap_resolve", "stackmap_xref",
     ].join(), names);
     const interactive = listed.filter((t) => t._meta?.["anthropic/requiresUserInteraction"] === true).map((t) => t.name);
     check("only plan_resolve_task always asks the user", interactive.join() === "plan_resolve_task", interactive.join());
@@ -234,6 +289,58 @@ try {
     check("note_query rejects a non-numeric limit", r.isError && /'limit' must be a number/.test(r.text), r.show);
     r = await call("note_write", { id: "../outside", title: "x", body: "y" });
     check("a note id that leaves the notes directory is an error", r.isError && /is not allowed/.test(r.text), r.show);
+
+    console.log("\n-- compiled programs, from a Ghidra export --");
+    {
+      let r = await call("stackmap_indexes");
+      const row = r.body?.indexes?.find((i) => i.name === "binary");
+      check("a directory holding a .gpr is served by the ghidra adapter", row?.adapter === "ghidra" && row?.roots?.[0]?.projects === 1, JSON.stringify(row));
+
+      r = await call("stackmap_get_function", { name: "load_save", scope: ["binary"], disassembly: 3 });
+      let fn = r.body?.results?.[0]?.value?.matches?.[0];
+      check("stackmap_get_function returns the function with its pseudocode, naming its program",
+        fn?.program === "/game.exe" && fn?.signature === "int load_save(char *)" && fn?.pseudocode?.includes("return 0;") && fn?.computed_calls_unresolved === 2, r.show);
+      check("…its callers and its disassembly", fn?.callers?.[0]?.from === "0x401500" && fn?.disassembly?.length === 3, JSON.stringify({ callers: fn?.callers, disassembly: fn?.disassembly }));
+      r = await call("stackmap_get_function", { address: "0x401008", scope: ["binary"] });
+      check("…and is found by an address inside the body", r.body?.results?.[0]?.value?.matches?.[0]?.entry === "0x401000", r.show);
+      r = await call("stackmap_get_function", { name: "load_save", address: "0x401000", scope: ["binary"] });
+      check("passing both name and address is an error", r.isError && /pass exactly one of 'name' or 'address'/.test(r.text), r.show);
+      r = await call("stackmap_get_function", { scope: ["binary"] });
+      check("passing neither is an error too", r.isError && /pass exactly one of 'name' or 'address'/.test(r.text), r.show);
+
+      r = await call("stackmap_get_type", { name: "SaveHeader", scope: ["binary"] });
+      const type = r.body?.results?.[0]?.value?.matches?.[0];
+      check("stackmap_get_type returns the layout with sizes and alignment", type?.size === 12 && type?.align === 4 && type?.fields?.length === 3, r.show);
+      check("…a bitfield's position", type?.fields?.[1]?.bit_offset === 0 && type?.fields?.[1]?.bit_size === 3, JSON.stringify(type?.fields?.[1]));
+      check("…and an anonymous member nested with its own layout",
+        type?.fields?.[2]?.anonymous === true && type.fields[2].name === null && type.fields[2].layout?.name === "Slot" && type.fields[2].layout.fields[0].name === "index",
+        JSON.stringify(type?.fields?.[2]));
+
+      r = await call("stackmap_xref", { string: "SAVE.WAD", scope: ["binary"], context: 1 });
+      let hits = r.body?.results?.[0]?.value?.hits ?? [];
+      check("stackmap_xref finds a string through a reference, with context",
+        hits.some((h) => h.address === "0x401006" && h.via === "reference (DATA)" && h.context.length === 2), JSON.stringify(hits));
+      check("…and through one pointer hop", hits.some((h) => h.via === "pointer word (4 bytes)" && h.address === "0x403000"), JSON.stringify(hits.map((h) => h.via)));
+      r = await call("stackmap_xref", { constant: "416", scope: ["binary"] });
+      check("…and a constant given in decimal among instruction operands",
+        r.body?.results?.[0]?.value?.hits?.[0]?.address === "0x401001", r.show);
+      r = await call("stackmap_xref", { string: "SAVE.WAD", constant: "1", scope: ["binary"] });
+      check("passing both a constant and a string is an error", r.isError && /pass exactly one of 'constant' or 'string'/.test(r.text), r.show);
+
+      // Capabilities are declared, so each tool refuses the project that lacks it, naming both.
+      r = await call("stackmap_get_function", { name: "anything", scope: ["other"] });
+      check("a Laravel project can't answer stackmap_get_function, and says which capability is missing",
+        r.body?.results?.[0]?.error?.includes('needs the "functions" capability, which index "other" (adapter "laravel")'), r.show);
+      r = await call("stackmap_resolve", { symbol: "App\\X", scope: ["binary"] });
+      check("a Ghidra project can't answer stackmap_resolve either",
+        r.body?.results?.[0]?.error?.includes('needs the "resolve" capability, which index "binary" (adapter "ghidra")'), r.show);
+
+      // Saving the program in Ghidra must show up as a caveat on the next answer.
+      writeFileSync(join(ghidraRoot, "binaries.rep", "idata", "00", "~00000000.db", "db.8.gbf"), "saved again");
+      r = await call("stackmap_get_function", { name: "load_save", scope: ["binary"] });
+      check("an answer from an export whose project was saved since carries a stale caveat",
+        r.body?.results?.[0]?.value?.caveats?.some((c) => /saved in Ghidra since this export was written/.test(c)), r.show);
+    }
 
     console.log("\n-- plans --");
     {
