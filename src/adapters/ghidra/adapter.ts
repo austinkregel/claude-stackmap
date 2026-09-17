@@ -39,7 +39,6 @@ interface LoadedExport {
   path: string;
   program: string;
   index: OpenIndex;
-  freshness: Freshness;
 }
 
 const gprFiles = (dir: string): string[] => {
@@ -104,7 +103,7 @@ class GhidraAdapter implements IndexedAdapter {
           const index = await openIndex(path);
           const program = (index.meta.get("program") as { path?: string } | undefined)?.path;
           if (typeof program !== "string") throw new Error(`${path}: no program.path, so this export can't be attributed to a program`);
-          loaded.push({ root, file: relative(root.path, path), path, program, index, freshness: exportFreshness(index.meta, path) });
+          loaded.push({ root, file: relative(root.path, path), path, program, index });
         }
       }
     }
@@ -113,11 +112,16 @@ class GhidraAdapter implements IndexedAdapter {
     return loaded;
   }
 
-  /** What a caller must be told about an export before trusting an answer from it. */
+  /**
+   * What a caller must be told about an export before trusting an answer from it. Freshness is read
+   * from the Ghidra project on every call, never cached from when the export was opened: the program
+   * may be saved in Ghidra while this server is running.
+   */
   private caveatsFor(e: LoadedExport): string[] {
     const out: string[] = [];
-    if (e.freshness.state === "stale") out.push(`${e.program} (${e.root.configured}): ${e.freshness.reason}`);
-    if (e.freshness.state === "unknown") out.push(`${e.program} (${e.root.configured}): the export's freshness can't be checked — ${e.freshness.reason}`);
+    const fresh: Freshness = exportFreshness(e.index.meta, e.path);
+    if (fresh.state === "stale") out.push(`${e.program} (${e.root.configured}): ${fresh.reason}`);
+    if (fresh.state === "unknown") out.push(`${e.program} (${e.root.configured}): the export's freshness can't be checked — ${fresh.reason}`);
     const counts = e.index.meta.get("counts") as { decompile_failed?: number; decompile_timeout?: number } | undefined;
     const failed = (counts?.decompile_failed ?? 0) + (counts?.decompile_timeout ?? 0);
     if (failed > 0) out.push(`${e.program}: ${failed} function(s) did not decompile in this export; their pseudocode is absent and each says why.`);
