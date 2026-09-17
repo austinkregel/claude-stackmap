@@ -22,6 +22,10 @@ A Claude Code plugin in five parts.
 
 ## Install
 
+Needs **Node 22.13 or newer**: the MCP server reads Ghidra exports through `node:sqlite`, which stopped
+needing `--experimental-sqlite` in 22.13. The launchers check the version of every node they find and
+refuse an older one by name.
+
 ```bash
 cd /path/to/stackmap
 npm install
@@ -71,7 +75,9 @@ Every entry point is an extensionless POSIX sh launcher with a Windows `.cmd` tw
 - **How they're called.** `.mcp.json` and `hooks.json` name the extensionless path. Hooks use exec form
   (`"command"` plus `"args"`), so no shell is involved. On Windows the path resolves to the `.cmd` twin.
 - **Finding node.** The sh launchers look on PATH, then in asdf, nvm, and mise installs, Homebrew, and
-  shims. The `.cmd` launchers look on PATH, then in `%ProgramFiles%\nodejs\node.exe`.
+  shims. The `.cmd` launchers look on PATH, then in `%ProgramFiles%\nodejs\node.exe`. Each candidate is
+  run, and one older than Node 22.13 is rejected, so the version is reported by the launcher rather
+  than as an import error inside `dist/`.
 - **Line endings.** `.gitattributes` checks out every text file with LF and the `.cmd` files with CRLF.
 - **Windows status.**
   - The MCP server resolves `scripts/launch` to `launch.cmd` in Claude Code's Windows build.
