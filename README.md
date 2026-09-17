@@ -121,6 +121,7 @@ Each entry in `indexes` is a **project**:
 | `defaultIndex` | Project used when a tool call omits `scope`. Required once you configure more than one. |
 | `globalExclude` | Directory names skipped in every project. |
 | `notesDir` | Where notes are stored. Default `~/.config/stackmap/notes`. |
+| `plans` | `{ "dir": … }`, where plans are stored. Default `~/.config/stackmap/plans`. The path must be absolute or start with `~/`; an unknown key is an error. |
 
 Index entries are validated one at a time. An unknown or misspelled key, or any other invalid field,
 leaves that entry out and names the problem in `stackmap_indexes`; the other projects still load. If
@@ -288,6 +289,40 @@ left out unless asked for and counted in `excludedRetracted`. Records that don't
   and strings as text, case-sensitively. A number never compares with a string.
 - **Presence:** `EXISTS` needs a non-null value. A key present with `null` counts as `MISSING`; use
   `EQUAL null` to find nulls.
+
+## Plans
+
+Nested plans with tracked tasks, kept outside any repo so they carry across sessions, `/clear`,
+`/compact`, and resume. Opening a child plan pauses its parent at a named task; closing the child
+makes the parent active again there.
+
+- **Storage.** One JSON file per plan under `plans.dir` (default `~/.config/stackmap/plans`).
+  `scripts/plan-store.mjs` owns the format and the rules, for the server and the hooks alike. A file
+  that can't be read as a plan is listed in `malformedFiles`, never skipped.
+- **Identity.** The server can't tell which session is calling: its environment keeps the startup
+  session id after `/clear`. The `plan-identity` hook stamps the current session (and subagent) into
+  every `plan_*` call as `_stackmap`, replacing anything the model sent, and fails closed. The server
+  refuses a call without the stamp. No permission decision is made, so your normal prompts apply.
+- **Ownership.** A plan belongs to one session. Another session's changes are refused until it calls
+  `plan_select` with `take_over: true`, which moves the plan's whole open tree. A subagent acts under
+  its parent's session.
+- **Tasks** are `todo`, `doing`, or final: `done` (needs `evidence`), or `not_needed`,
+  `wont_deliver`, `already_done` (only through `plan_resolve_task`, which Claude Code asks you to
+  approve on every call).
+- **Closing** is refused while a task isn't final, a child plan is open, or the deliverable is
+  missing: `in-place` needs nothing, `document` needs a readable file, `branch` needs the branch with
+  commits beyond its base.
+
+| Tool | Does |
+|---|---|
+| `plan_status` | this session's active plan, open tasks, parent chain, open children; paused, delivered, and draft plans |
+| `plan_create` | a root plan, made active (refused if one is already active) |
+| `plan_create_child` | a child of the active plan, pausing it at `from_task` (required) |
+| `plan_select` | make a plan active, pausing the current one; `take_over` moves another session's plan here |
+| `plan_get`, `plan_list` | one record with its parents; plans filtered by `status`, `project`, `owner` (`"me"`), `under` |
+| `plan_add_task`, `plan_update_task` | add tasks; change text or move between `todo`, `doing`, `done` |
+| `plan_resolve_task` | set `not_needed`, `wont_deliver`, or `already_done` with your quoted words |
+| `plan_close` | close a plan and resume its parent |
 
 ## Guards
 
@@ -520,7 +555,7 @@ npm test                   # every suite
 npm run bench              # note retrieval latency and rank quality
 npm run plugin-test        # hooks.json wiring, launcher twins and line endings, names, and closing-block drift
 npm run shell-tokens-test  # the shell parser the Bash guards evaluate
-npm run guard-test         # destructive-command and commit-message rules, the guard launcher
+npm run guard-test         # destructive-command and commit-message rules, plan-identity stamping, the guard launcher
 npm run truncate-test      # no-truncate
 npm run suppress-test      # no-suppress and the suppression catalog
 npm run house-rules-test   # house rules: extend/replace/disable, and every failure path
@@ -531,7 +566,8 @@ npm run cli-test           # every sm subcommand: output, counts, --json, exit c
 npm run config-test        # config resolution, per-entry validation, scope, detection, roots, caching, add-index
 npm run extract-test       # PHP extractors + adapter wiring, including several roots, on inline fixtures
 npm run notes-test         # note store and file format, stamps across roots, typed notes, note_query, the data tokenizer
-npm run smoke              # every MCP tool over stdio on Laravel fixtures, including scope, aliases, and failure paths
+npm run plans-test         # the plan store: config section, validation, nesting, ownership, closing
+npm run smoke              # every MCP tool over stdio on Laravel fixtures, including scope, aliases, plans, and failure paths
 ```
 
 Every suite uses temporary config, state, and fixtures, so none needs or reads your own config.
@@ -551,6 +587,7 @@ src/
   notes/schemas.ts     the shipped typed-note schemas and record validation
   notes/query.ts       note_query filters: parsing against a schema, and matching
   notes/tools.ts       note_* tool handlers
+  plans/tools.ts       plan_* tool handlers over scripts/plan-store.mjs
   types/layout.ts      the type layout shape struct_field_list stores
   php/psr4.ts          composer.json PSR-4 -> symbol/file mapping, both directions
   php/uses.ts          namespace + use-statement parsing, short-name expansion
@@ -570,6 +607,8 @@ scripts/
   no-suppress.mjs      check-silencing edits
   suppression-rules.mjs  the suppression catalog
   house-rules.mjs      house rules injection
+  plan-store.mjs       plans: the `plans` config section, record format, lifecycle rules (a library; types in plan-store.d.mts)
+  plan-identity.mjs    stamps the calling session into every plan_* call
   deliverables.mjs     closing blocks for the skills and the auditor, and their checks
   skill-arm.mjs / skill-check.mjs  closing-block enforcement for /review and /double-blind
   audit-check.mjs      the auditor's report check, Reproducers verified against its transcript
