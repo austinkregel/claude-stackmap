@@ -1,6 +1,6 @@
 import type { IndexConfig } from "../config.js";
 
-export type AdapterId = "laravel" | "phoenix" | "node";
+export type AdapterId = "laravel" | "ghidra" | "phoenix" | "node";
 
 /**
  * What a given edge is evidence of. These answer different questions and must not be
@@ -111,6 +111,86 @@ export interface StackAdapter {
 }
 
 /**
+ * Capabilities for compiled programs, served from a Ghidra export. Their result fields are snake_case
+ * because that is what the tools return (user decision); the older `resolve` capability keeps its
+ * camelCase fields. They are async because an export is indexed on first use.
+ */
+export interface CompiledFunction {
+  program: string;
+  root: string;
+  name: string;
+  entry: string;
+  size: number;
+  signature: string | null;
+  calling_convention: string | null;
+  noreturn: boolean;
+  thunk_of: string | null;
+  source: string | null;
+  decompile: string;
+  decompile_error: string | null;
+  pseudocode: string | null;
+  computed_calls_unresolved: number;
+  callers: Array<{ from: string; function: string | null; name: string | null }>;
+  callees: Array<{ entry: string; name: string | null }>;
+  data_refs: Array<{ from: string; type: string }>;
+  disassembly: Array<{ address: string; text: string }>;
+}
+
+export interface TypeLayoutField {
+  name: string | null;
+  anonymous: boolean;
+  offset: number;
+  size: number;
+  type: string | null;
+  bit_offset?: number;
+  bit_size?: number;
+  comment: string | null;
+  layout?: CompiledTypeLayout;
+  caveat?: string;
+}
+
+export interface CompiledTypeLayout {
+  program: string;
+  root: string;
+  name: string;
+  path: string;
+  kind: string;
+  size: number;
+  align: number | null;
+  packing: number | null;
+  source_archive: string | null;
+  description: string | null;
+  fields: TypeLayoutField[];
+  caveats: string[];
+}
+
+export interface XrefHit {
+  program: string;
+  root: string;
+  kind: "constant" | "string";
+  /** What matched: the scalar, or the string's address. */
+  matched: string;
+  value: string | null;
+  address: string;
+  function: { entry: string; name: string } | null;
+  /** How the reference reaches the target: an instruction operand, a reference, or a pointer word. */
+  via: string;
+  context: Array<{ address: string; text: string }>;
+}
+
+export interface FunctionLookup {
+  getFunction(query: { name?: string; address?: string; limit: number; context: number }): Promise<{ matches: CompiledFunction[]; total: number; caveats: string[] }>;
+}
+
+export interface TypeLookup {
+  getType(query: { name?: string; path?: string; limit: number; depth: number }): Promise<{ matches: CompiledTypeLayout[]; total: number; caveats: string[] }>;
+}
+
+export interface XrefSearch {
+  findRefs(query: { constant?: string; string?: string; limit: number; context: number }): Promise<{ hits: XrefHit[]; total: number; caveats: string[] }>;
+}
+
+/**
  * What an index provides. Every capability is declared; null means the adapter doesn't have it, and
  * a tool that needs it fails naming the adapter and the capability.
  */
@@ -119,6 +199,9 @@ export interface IndexedAdapter {
   /** Cheap counts for `stackmap_indexes`. */
   stats(): AdapterStats;
   readonly resolve: StackAdapter | null;
+  readonly functions: FunctionLookup | null;
+  readonly types: TypeLookup | null;
+  readonly xref: XrefSearch | null;
 }
 
 export type Capability = Exclude<keyof IndexedAdapter, "id" | "stats">;
