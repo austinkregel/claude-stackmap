@@ -27,7 +27,7 @@ export const IndexConfigSchema = z.strictObject({
   /** The project's main root; it owns the index. `~` is expanded. */
   root: z.string().min(1),
   /** Which stack adapter to use. `auto` detects from the root. */
-  adapter: z.enum(["auto", "laravel", "phoenix", "node"]).default("auto"),
+  adapter: z.enum(["auto", "laravel", "ghidra", "phoenix", "node"]).default("auto"),
   /** Directories scanned for source. Adapter supplies defaults when omitted. */
   include: z.array(z.string()).optional(),
   /** Directories never scanned, merged with adapter + global defaults. */
