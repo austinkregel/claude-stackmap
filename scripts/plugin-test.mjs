@@ -140,6 +140,21 @@ for (const launcher of LAUNCHERS) {
   check(`${launcher}.cmd: plain ASCII (cmd.exe reads batch files in the OEM code page)`, /^[\t\r\n\x20-\x7e]*$/.test(cmdBytes));
 }
 check("find-node.cmd exists beside find-node.sh", existsSync(join(scripts, "find-node.cmd")) && existsSync(join(scripts, "find-node.sh")));
+// One Node minimum, stated in three places: a launcher that accepts an older node than the server
+// needs would fail inside dist/ instead of in the launcher's own message.
+{
+  const engines = JSON.parse(read("package.json")).engines.node;
+  const declared = /^>=(\d+)\.(\d+)(?:\.\d+)?$/.exec(engines);
+  check("engines.node is a >=major.minor minimum", Boolean(declared), engines);
+  const sh = read("scripts/find-node.sh");
+  const cmd = read("scripts/find-node.cmd");
+  const minOf = (text, pattern) => `${pattern("MAJOR").exec(text)?.[1]}.${pattern("MINOR").exec(text)?.[1]}`;
+  const shMin = minOf(sh, (part) => new RegExp(`^NODE_MIN_${part}=(\\d+)$`, "m"));
+  const cmdMin = minOf(cmd, (part) => new RegExp(`^@set "NODE_MIN_${part}=(\\d+)"$`, "m"));
+  const want = declared ? `${declared[1]}.${declared[2]}` : "(unparsed)";
+  check("find-node.sh requires the same Node minimum as engines.node", shMin === want, `${shMin} vs ${want}`);
+  check("find-node.cmd requires the same Node minimum as engines.node", cmdMin === want, `${cmdMin} vs ${want}`);
+}
 check("no .sh launcher remains", !["launch.sh", "guard.sh", "hook-open.sh"].some((f) => existsSync(join(scripts, f))));
 const gitattributes = read(".gitattributes");
 check(".gitattributes checks text out as LF, and .cmd as CRLF", /^\* text=auto eol=lf$/m.test(gitattributes) && /^\*\.cmd text eol=crlf$/m.test(gitattributes), gitattributes);
