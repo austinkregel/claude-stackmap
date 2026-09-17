@@ -183,7 +183,7 @@ try {
   check("an undetectable stack is an error", t.ok, t.detail);
   t = throws(() => getAdapter(conf, cfg({ indexes: [{ name: "why", root: join(sandbox, "repos", "broken-composer") }] }).indexes[0]), /could not detect a stack .*treated as no manifest/);
   check("…and says what detection found along the way", t.ok, t.detail);
-  t = throws(() => getAdapter(conf, cfg({ indexes: [{ name: "ex", root: join(sandbox, "repos", "phoenix") }] }).indexes[0]), /adapter "phoenix" is not implemented yet \(index "ex"\)\. Implemented: laravel/);
+  t = throws(() => getAdapter(conf, cfg({ indexes: [{ name: "ex", root: join(sandbox, "repos", "phoenix") }] }).indexes[0]), /adapter "phoenix" is not implemented yet \(index "ex"\)\. Implemented: ghidra, laravel/);
   check("a detected but planned stack says it isn't implemented", t.ok, t.detail);
   t = throws(() => getAdapter(conf, cfg({ indexes: [{ name: "forced", root: join(sandbox, "repos", "laravel"), adapter: "node" }] }).indexes[0]), /adapter "node" is not implemented yet/);
   check("an explicit adapter overrides detection", t.ok, t.detail);
