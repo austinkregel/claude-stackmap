@@ -2,6 +2,7 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { existsSync, renameSync, rmSync, statSync } from "node:fs";
 import { FORMAT_VERSION, ROW_SECTIONS, VALUE_KEYS, type RowSection } from "./format.js";
 import { readExport } from "./stream.js";
+import { keyOf } from "./address.js";
 
 /**
  * A Ghidra export is JSON (one file per program, written beside its .gpr) and can be hundreds of
@@ -12,23 +13,23 @@ import { readExport } from "./stream.js";
  * Bump INDEX_VERSION whenever the tables change, so an index built by an older stackmap is rebuilt
  * instead of queried with the wrong shape.
  */
-export const INDEX_VERSION = 1;
+export const INDEX_VERSION = 2;
 
 const SCHEMA = `
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE functions (
-  entry TEXT PRIMARY KEY, name TEXT NOT NULL, size INTEGER NOT NULL, signature TEXT,
+  entry TEXT PRIMARY KEY, entry_key TEXT NOT NULL, name TEXT NOT NULL, size INTEGER NOT NULL, signature TEXT,
   calling_convention TEXT, noreturn INTEGER NOT NULL, thunk_of TEXT, source TEXT,
   computed_calls_unresolved INTEGER NOT NULL, decompile TEXT NOT NULL, decompile_error TEXT, pseudocode TEXT
 );
-CREATE TABLE function_bodies (entry TEXT NOT NULL, lo TEXT NOT NULL, hi TEXT NOT NULL);
+CREATE TABLE function_bodies (entry TEXT NOT NULL, lo TEXT NOT NULL, hi TEXT NOT NULL, lo_key TEXT NOT NULL, hi_key TEXT NOT NULL);
 CREATE TABLE function_refs (entry TEXT NOT NULL, from_addr TEXT NOT NULL, from_fn TEXT, ref_type TEXT NOT NULL, is_call INTEGER NOT NULL);
 CREATE TABLE function_callees (entry TEXT NOT NULL, callee TEXT NOT NULL);
-CREATE TABLE instructions (addr TEXT PRIMARY KEY, fn TEXT, text TEXT NOT NULL);
+CREATE TABLE instructions (addr TEXT PRIMARY KEY, addr_key TEXT NOT NULL, fn TEXT, text TEXT NOT NULL);
 CREATE TABLE instruction_scalars (addr TEXT NOT NULL, scalar TEXT NOT NULL);
 CREATE TABLE instruction_refs (addr TEXT NOT NULL, to_addr TEXT NOT NULL, ref_type TEXT NOT NULL);
-CREATE TABLE strings (address TEXT PRIMARY KEY, value TEXT, length INTEGER NOT NULL, type TEXT, defined INTEGER NOT NULL);
-CREATE TABLE pointer_hits (address TEXT NOT NULL, target TEXT NOT NULL, width INTEGER NOT NULL);
+CREATE TABLE strings (address TEXT PRIMARY KEY, address_key TEXT NOT NULL, value TEXT, length INTEGER NOT NULL, type TEXT, defined INTEGER NOT NULL);
+CREATE TABLE pointer_hits (address TEXT NOT NULL, address_key TEXT NOT NULL, target TEXT NOT NULL, width INTEGER NOT NULL);
 CREATE TABLE types (
   path TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL, size INTEGER NOT NULL,
   zero_length INTEGER NOT NULL, alignment INTEGER, packing_enabled INTEGER, explicit_packing INTEGER,
@@ -46,16 +47,20 @@ CREATE TABLE memory_blocks (
 
 const INDEXES = `
 CREATE INDEX functions_name ON functions (name);
+CREATE INDEX functions_key ON functions (entry_key);
 CREATE INDEX function_bodies_entry ON function_bodies (entry);
+CREATE INDEX function_bodies_range ON function_bodies (lo_key, hi_key);
 CREATE INDEX function_refs_entry ON function_refs (entry);
 CREATE INDEX function_refs_from ON function_refs (from_addr);
 CREATE INDEX function_callees_entry ON function_callees (entry);
-CREATE INDEX instructions_fn ON instructions (fn);
+CREATE INDEX instructions_fn ON instructions (fn, addr_key);
+CREATE INDEX instructions_key ON instructions (addr_key);
 CREATE INDEX instruction_scalars_scalar ON instruction_scalars (scalar);
 CREATE INDEX instruction_scalars_addr ON instruction_scalars (addr);
 CREATE INDEX instruction_refs_to ON instruction_refs (to_addr);
 CREATE INDEX instruction_refs_addr ON instruction_refs (addr);
 CREATE INDEX strings_value ON strings (value);
+CREATE INDEX strings_key ON strings (address_key);
 CREATE INDEX pointer_hits_target ON pointer_hits (target);
 CREATE INDEX pointer_hits_address ON pointer_hits (address);
 CREATE INDEX types_name ON types (name);
@@ -116,15 +121,15 @@ export async function buildIndex(exportPath: string, indexPath: string): Promise
     db.exec("PRAGMA journal_mode = OFF");
     db.exec(SCHEMA);
     const insert: Inserts = {
-      function: db.prepare("INSERT INTO functions VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"),
-      body: db.prepare("INSERT INTO function_bodies VALUES (?,?,?)"),
+      function: db.prepare("INSERT INTO functions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"),
+      body: db.prepare("INSERT INTO function_bodies VALUES (?,?,?,?,?)"),
       ref: db.prepare("INSERT INTO function_refs VALUES (?,?,?,?,?)"),
       callee: db.prepare("INSERT INTO function_callees VALUES (?,?)"),
-      instruction: db.prepare("INSERT INTO instructions VALUES (?,?,?)"),
+      instruction: db.prepare("INSERT INTO instructions VALUES (?,?,?,?)"),
       scalar: db.prepare("INSERT INTO instruction_scalars VALUES (?,?)"),
       insRef: db.prepare("INSERT INTO instruction_refs VALUES (?,?,?)"),
-      string: db.prepare("INSERT INTO strings VALUES (?,?,?,?,?)"),
-      pointer: db.prepare("INSERT INTO pointer_hits VALUES (?,?,?)"),
+      string: db.prepare("INSERT INTO strings VALUES (?,?,?,?,?,?)"),
+      pointer: db.prepare("INSERT INTO pointer_hits VALUES (?,?,?,?)"),
       type: db.prepare("INSERT INTO types VALUES (?,?,?,?,?,?,?,?,?,?)"),
       field: db.prepare("INSERT INTO type_fields VALUES (?,?,?,?,?,?,?,?,?,?)"),
       block: db.prepare("INSERT INTO memory_blocks VALUES (?,?,?,?,?,?,?,?,?)"),
@@ -180,6 +185,7 @@ function addRow(insert: Inserts, section: RowSection, row: unknown, where: strin
       const entry = str(r.entry, `${where}.entry`);
       insert.function.run(
         entry,
+        keyOf(entry, `${where}.entry`),
         str(r.name, `${where}.name`),
         int(r.size, `${where}.size`),
         maybeStr(r.signature, `${where}.signature`),
@@ -194,7 +200,9 @@ function addRow(insert: Inserts, section: RowSection, row: unknown, where: strin
       );
       for (const range of arr(r.body, `${where}.body`)) {
         const [lo, hi] = arr(range, `${where}.body[]`);
-        insert.body.run(entry, str(lo, `${where}.body[][0]`), str(hi, `${where}.body[][1]`));
+        const loText = str(lo, `${where}.body[][0]`);
+        const hiText = str(hi, `${where}.body[][1]`);
+        insert.body.run(entry, loText, hiText, keyOf(loText, `${where}.body[][0]`), keyOf(hiText, `${where}.body[][1]`));
       }
       for (const ref of arr(r.refs_to, `${where}.refs_to`)) {
         const [from, fromFn, type, isCall] = arr(ref, `${where}.refs_to[]`);
@@ -212,7 +220,7 @@ function addRow(insert: Inserts, section: RowSection, row: unknown, where: strin
     case "instructions": {
       const [addr, fn, text, scalars, refs] = arr(row, where);
       const at = str(addr, `${where}[0]`);
-      insert.instruction.run(at, maybeStr(fn, `${where}[1]`), str(text, `${where}[2]`));
+      insert.instruction.run(at, keyOf(at, `${where}[0]`), maybeStr(fn, `${where}[1]`), str(text, `${where}[2]`));
       for (const s of arr(scalars, `${where}[3]`)) insert.scalar.run(at, str(s, `${where}[3][]`));
       for (const ref of arr(refs, `${where}[4]`)) {
         const [to, type] = arr(ref, `${where}[4][]`);
@@ -224,6 +232,7 @@ function addRow(insert: Inserts, section: RowSection, row: unknown, where: strin
       const r = obj(row, where);
       insert.string.run(
         str(r.address, `${where}.address`),
+        keyOf(str(r.address, `${where}.address`), `${where}.address`),
         maybeStr(r.value, `${where}.value`),
         int(r.length, `${where}.length`),
         maybeStr(r.type, `${where}.type`),
@@ -233,7 +242,7 @@ function addRow(insert: Inserts, section: RowSection, row: unknown, where: strin
     }
     case "pointer_hits": {
       const r = obj(row, where);
-      insert.pointer.run(str(r.address, `${where}.address`), str(r.target, `${where}.target`), int(r.width, `${where}.width`));
+      insert.pointer.run(str(r.address, `${where}.address`), keyOf(str(r.address, `${where}.address`), `${where}.address`), str(r.target, `${where}.target`), int(r.width, `${where}.width`));
       return;
     }
     case "types": {
