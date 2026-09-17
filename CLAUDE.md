@@ -336,6 +336,34 @@ that isn't on disk yields `exists: false` with the candidate path.
 - Opening a child plan requires the parent task to resume at; there is no default (user decision).
   A handed-off plan closes only after its subagent delivers it (user decision).
 
+### Ghidra: stackmap reads an export, and never runs Ghidra
+
+**stackmap's code, tests, hooks, skills and agents never invoke Ghidra.** The agent that owns the
+project runs `ghidra_scripts/StackmapExport.java` itself, read-only, and stackmap only reads the JSON
+it writes. plugin-test enforces this: the script must be the only Java file shipped and must call none
+of Ghidra's mutators.
+
+- **Format lockstep.** `FORMAT_VERSION` in the script must equal the one in
+  `src/adapters/ghidra/format.ts`; plugin-test reads both from source. Bump it whenever the export's
+  shape changes — an export of another version is refused with both numbers, never read halfway.
+- **The export.** One JSON file per program, written beside the `.gpr` through a temporary file and a
+  rename. Addresses are hex strings. `strings` holds defined strings **and** NUL-terminated printable
+  runs Ghidra never defined (`undefined_string_min_length`, 4): the PS3 `VZ.WAD` case is only findable
+  through those. Long sections (`instructions`, `functions`, `strings`, `pointer_hits`, `types`,
+  `memory_blocks`) are top-level arrays so a reader can stream them.
+- **Never parse an export whole.** `stream.ts` hands over one array element at a time; `index-build.ts`
+  turns it into SQLite beside the export (`<export>.sqlite`). Measured on a 29k-function program: the
+  export is 201 MB, `JSON.parse` of it costs 1.2 GB, and the streaming index build costs 6.5 s and
+  327 MB. Bump `INDEX_VERSION` when the tables change; the index records the export's size and mtime
+  and is rebuilt when either differs.
+- **Staleness is the program's own database file**, the newest `db.<N>.gbf` in the folder that
+  `idata/~index.dat` maps its file id to. **Do not compare timestamps across the project:** a read-only
+  open (which is how an export is produced) rewrites the project's index files, so that would mark
+  every export stale the moment it is written. Both are PROVEN on a scratch project. A project that
+  can't be read is `unknown`, never fresh and never stale.
+- **A Ghidra project is opened by its owner only.** Headless refuses a project owned by another OS user
+  (`NotOwnerException`), which is the agent's setup problem, not something stackmap can work around.
+
 ### Note store: provenance and caching invariants
 
 `src/notes/store.ts` writes notes in frontmatter format 2 (a `format: 2` line, every value JSON);
