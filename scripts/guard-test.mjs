@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Suite for the destructive-command guard (guard.mjs) and its guard wrapper (scripts/guard, or guard.cmd on Windows), including every
- * fail-closed path. Uses a temporary $STACKMAP_CONFIG and $STACKMAP_STATE, never the real ones.
+ * fail-closed path, and for plan-identity.mjs, which stamps the caller into every plan tool call. Uses a temporary $STACKMAP_CONFIG and $STACKMAP_STATE, never the real ones.
  */
 import { execFileSync } from "node:child_process";
 import crossSpawn from "cross-spawn";
@@ -144,6 +144,52 @@ try {
 
   console.log("\n-- non-Bash tools are untouched --");
   check("Read tool passes through", ALLOW, { hook_event_name: "PreToolUse", tool_name: "Read", tool_input: { file_path: "/x" } });
+
+  console.log("\n-- plan-identity: stamps every plan call, fails closed --");
+  {
+    const planCall = (extra = {}, toolInput = { id: "p-1", tasks: ["x"] }) => ({
+      hook_event_name: "PreToolUse",
+      tool_name: "mcp__plugin_stackmap_stackmap__plan_add_task",
+      tool_input: toolInput,
+      session_id: "sess-1",
+      cwd: sandbox,
+      transcript_path: join(sandbox, "t.jsonl"),
+      ...extra,
+    });
+    const stampOf = (payload) => {
+      const r = run(payload, { script: "plan-identity.mjs" });
+      let out = null;
+      try {
+        out = JSON.parse(r.out).hookSpecificOutput;
+      } catch {
+        // reported by the checks below
+      }
+      return { ...r, out };
+    };
+    const verify = (label, ok, detail) => {
+      if (!ok) failed++;
+      console.log(`${ok ? "PASS" : "FAIL"}  ${label}${ok ? "" : `  <- ${detail}`}`);
+    };
+
+    let r = stampOf(planCall());
+    verify("the call is allowed through with its input replaced", r.code === ALLOW && r.out?.hookEventName === "PreToolUse" && r.out?.updatedInput?.id === "p-1" && r.out.updatedInput.tasks?.join() === "x", r.out ? JSON.stringify(r.out) : r.err);
+    verify("the stamp names the session, with no agent", JSON.stringify(r.out?.updatedInput?._stackmap) === JSON.stringify({ session_id: "sess-1", agent_id: null, agent_type: null, cwd: sandbox, transcript_path: join(sandbox, "t.jsonl"), transcript_uuid: null }), JSON.stringify(r.out?.updatedInput?._stackmap));
+    verify("no permission decision is made, so the user's prompts still apply", r.out !== null && !("permissionDecision" in r.out), JSON.stringify(r.out));
+    r = stampOf(planCall({}, { id: "p-1", _stackmap: { session_id: "forged", agent_id: null } }));
+    verify("a _stackmap the model supplied is replaced", r.out?.updatedInput?._stackmap?.session_id === "sess-1", JSON.stringify(r.out?.updatedInput));
+    r = stampOf(planCall({ agent_id: "agent-7", agent_type: "general-purpose" }));
+    verify("a subagent's call carries its agent id and type under the parent session", r.out?.updatedInput?._stackmap?.agent_id === "agent-7" && r.out.updatedInput._stackmap.agent_type === "general-purpose" && r.out.updatedInput._stackmap.session_id === "sess-1", JSON.stringify(r.out?.updatedInput?._stackmap));
+
+    const planCheck = (label, payload, reason) => check(label, BLOCK, payload, { script: "plan-identity.mjs", reason, raw: typeof payload === "string" });
+    planCheck("unreadable payload", "{not json", /unreadable hook payload/);
+    planCheck("no session_id", planCall({ session_id: undefined }), /no session_id/);
+    planCheck("an empty transcript_path", planCall({ transcript_path: "" }), /no transcript_path/);
+    planCheck("an agent_id that isn't a string", planCall({ agent_id: 7 }), /agent_id is 7/);
+    planCheck("a tool_input that isn't an object", planCall({}, ["p-1"]), /no readable tool_input/);
+    planCheck("a non-plan tool (a matcher mistake)", planCall({ tool_name: "mcp__plugin_stackmap_stackmap__note_get" }), /isn't a stackmap plan tool/);
+    planCheck("another plugin's plan tool", planCall({ tool_name: "mcp__plugin_other_stackmap__plan_status" }), /isn't a stackmap plan tool/);
+    planCheck("a non-PreToolUse event", planCall({ hook_event_name: "PostToolUse" }), /expected a PreToolUse payload/);
+  }
 } finally {
   rmSync(sandbox, { recursive: true, force: true });
 }
