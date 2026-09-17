@@ -29,7 +29,7 @@ if not exist "%~dp0%NAME%" goto fail
 set "WHY=cannot load node resolution, so %NAME% did not run"
 if not exist "%~dp0find-node.cmd" goto fail
 call "%~dp0find-node.cmd"
-set "WHY=no usable node binary (need Node 18.17+), so %NAME% did not run"
+set "WHY=no usable node binary (need Node 22.13+), so %NAME% did not run"
 if not defined NODE goto fail
 "%NODE%" "%~dp0%NAME%"
 exit /b %ERRORLEVEL%
