@@ -27,5 +27,5 @@ esac
 SCRIPT="$ROOT/scripts/$NAME"
 [ -f "$SCRIPT" ] || fail "scripts/$NAME is missing, so that hook did not run"
 . "$ROOT/scripts/find-node.sh" 2>/dev/null || fail "cannot load node resolution, so $NAME did not run"
-NODE=$(find_node) || fail "no usable node binary (need Node 18.17+), so $NAME did not run"
+NODE=$(find_node) || fail "no usable node binary (need Node 22.13+), so $NAME did not run"
 exec "$NODE" "$SCRIPT"
