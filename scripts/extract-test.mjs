@@ -11,6 +11,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const { extractBindings } = await import(pathToFileURL(join(root, "dist/php/bindings.js")).href);
 const { extractDeclarations } = await import(pathToFileURL(join(root, "dist/php/declarations.js")).href);
 const { laravelFactory } = await import(pathToFileURL(join(root, "dist/adapters/laravel.js")).href);
+const { scanLiterals, literalValue } = await import(pathToFileURL(join(root, "dist/php/literals.js")).href);
 
 let failed = 0;
 const check = (label, cond, detail = "") => {
@@ -426,6 +427,107 @@ class AppServiceProvider { public function register(): void { $this->app->bind(C
     const missing = make([root("root", "walkmiss", ["app", "nope"])]);
     const mstats = missing.stats().roots[0];
     check("include directories that don't exist are reported, not ignored", mstats.warnings.some((w) => /include directories not found: app, nope/.test(w)), JSON.stringify(mstats.warnings));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+}
+
+console.log("\n-- PHP literals: what a source xref searches --");
+{
+  const php = [
+    "<?php",
+    "// 'commented.wad' and 1234 in a line comment",
+    "# 'hash-commented.wad'",
+    "/* 'block.wad' 99 */",
+    "class Loader {",
+    "    const PATH = 'data/VZ.WAD';",
+    "    public function load($name) {",
+    '        $msg = "loading $name from VZ.WAD";',
+    "        $size = 0x1a0;",
+    "        $also = 416;",
+    "        $bin = 0b1101_0000;",
+    "        $oct = 0o777;",
+    "        $legacy = 0755;",
+    "        $float = 1.5e3;",
+    "        $esc = 'it\\'s here';",
+    '        $dq = "tab\\there";',
+    "        $sql = <<<SQL",
+    "        SELECT 'not-a-literal' FROM t WHERE id = 42",
+    "        SQL;",
+    "        $out = `ls 'quoted'`;",
+    "        return $size;",
+    "    }",
+    "}",
+  ].join("\n");
+  const scan = scanLiterals(php);
+  const strings = scan.literals.filter((l) => l.kind === "string").map((l) => l.value);
+  const numbers = scan.literals.filter((l) => l.kind === "number").map((l) => l.value);
+  check("a literal inside a line, hash, or block comment is not reported as a use",
+    !strings.some((v) => /commented|hash-commented|block/.test(v)) && !numbers.includes("1234") && !numbers.includes("99"), JSON.stringify({ strings, numbers }));
+  check("single- and double-quoted strings are read, with escapes decoded",
+    strings.includes("data/VZ.WAD") && strings.includes("it's here") && strings.includes("tab\there"), JSON.stringify(strings));
+  check("an interpolated double-quoted string is marked as such",
+    scan.literals.find((l) => l.value.startsWith("loading "))?.interpolated === true, JSON.stringify(scan.literals.find((l) => l.value.startsWith("loading "))));
+  check("numbers are read in every base PHP writes", ["0x1a0", "416", "0b11010000", "0o777", "0755", "1.5e3"].every((n) => numbers.includes(n)), JSON.stringify(numbers));
+  check("a heredoc body is stepped over and counted, not searched",
+    scan.heredocs === 1 && !strings.includes("not-a-literal") && !numbers.includes("42"), JSON.stringify({ heredocs: scan.heredocs, strings }));
+  check("a backtick shell-exec string is counted too", scan.shellExec === 1 && !strings.includes("quoted"), JSON.stringify({ shellExec: scan.shellExec, strings }));
+  const konst = scan.literals.find((l) => l.value === "data/VZ.WAD");
+  check("a literal carries the line and column it is written at", konst.line === 6 && konst.column === 18 && konst.raw === "'data/VZ.WAD'", JSON.stringify(konst));
+  check("#[Attribute] is code, not a comment", scanLiterals("<?php\n#[Route('/home')]\nclass C {}\n").literals.map((l) => l.value).join() === "/home");
+  check("an unterminated string ends the file instead of hanging", scanLiterals("<?php $a = 'open;").literals.length === 1);
+
+  check("every base reads back as the same number",
+    [["0x1a0", 416n], ["416", 416n], ["0b11010000", 208n], ["0o777", 511n], ["0755", 493n], ["1_000", 1000n]].every(([text, want]) => literalValue(text) === want));
+  check("a float is not a whole number", literalValue("1.5e3") === null && literalValue("nope") === null);
+}
+
+console.log("\n-- adapter: stackmap_xref over PHP source --");
+{
+  const base = mkdtempSync(join(tmpdir(), "stackmap-literals-"));
+  try {
+    const put = (rel, text) => {
+      const p = join(base, rel);
+      mkdirSync(dirname(p), { recursive: true });
+      writeFileSync(p, text);
+    };
+    put("app/composer.json", JSON.stringify({ require: { "laravel/framework": "^13.0" }, autoload: { "psr-4": { "App\\": "app/" } } }));
+    put("app/app/Wad.php", ["<?php", "namespace App;", "class Wad {", "    const NAME = 'VZ.WAD';", "    const SIZE = 0x1a0;", "    public function open() {", "        return self::NAME . '/vz.wad.bak';", "    }", "}"].join("\n"));
+    put("pkg/composer.json", JSON.stringify({ autoload: { "psr-4": { "Pkg\\": "src/" } } }));
+    put("pkg/src/Other.php", ["<?php", "namespace Pkg;", "class Other {", "    public $n = 416;", "}"].join("\n"));
+    const cfg = { name: "src", root: join(base, "app"), adapter: "laravel", options: {}, enabled: true, aliases: [{ path: join(base, "pkg"), include: ["src"] }] };
+    const roots = [
+      { kind: "root", configured: join(base, "app"), path: join(base, "app"), include: null, exclude: null },
+      { kind: "alias", configured: "~/pkg", path: join(base, "pkg"), include: ["src"], exclude: null },
+    ];
+    const adapter = laravelFactory.create(cfg, roots, []);
+    check("a Laravel project provides xref but not the compiled-program capabilities",
+      Boolean(adapter.xref) && adapter.functions === null && adapter.types === null && Boolean(adapter.resolve));
+
+    const exact = await adapter.xref.findRefs({ string: "VZ.WAD", limit: 10, context: 1 });
+    check("an exact string literal is found, with its file, line and column",
+      exact.hits.some((h) => h.file === "app/Wad.php" && h.line === 4 && h.via === "string literal (exact)" && h.matched === "'VZ.WAD'"), JSON.stringify(exact.hits));
+    check("…and a longer literal containing it, case-insensitively",
+      exact.hits.some((h) => h.value === "/vz.wad.bak" && h.via === "string literal (contains)"), JSON.stringify(exact.hits.map((h) => [h.value, h.via])));
+    check("…each with the surrounding source lines",
+      exact.hits[0].context.map((c) => c.line).join() === "3,4,5" && exact.hits[0].context[1].text.includes("VZ.WAD"), JSON.stringify(exact.hits[0].context));
+    check("the caveats say how many files were searched and what was stepped over",
+      exact.caveats.some((c) => /searched 2 PHP file\(s\)/.test(c)), JSON.stringify(exact.caveats));
+
+    const constant = await adapter.xref.findRefs({ constant: "416", limit: 10, context: 0 });
+    check("a constant is found in hex in one root and in decimal in another",
+      constant.hits.map((h) => (h.root === "~/pkg" ? "alias" : "root") + ":" + h.matched).sort().join() === "alias:416,root:0x1a0", JSON.stringify(constant.hits.map((h) => [h.root, h.matched])));
+    const hex = await adapter.xref.findRefs({ constant: "0x1a0", limit: 10, context: 0 });
+    check("the same constant written in hex finds the same literals", hex.total === constant.total, JSON.stringify({ hex: hex.total, decimal: constant.total }));
+    const none = await adapter.xref.findRefs({ string: "nothing-here", limit: 10, context: 0 });
+    check("a value no file holds returns no hits, with the search's reach stated", none.hits.length === 0 && none.total === 0 && none.caveats.length > 0);
+    let bad = null;
+    try {
+      await adapter.xref.findRefs({ constant: "1.5", limit: 5, context: 0 });
+    } catch (err) {
+      bad = err.message;
+    }
+    check("a constant that isn't a whole number is an error saying what to pass", /is not a whole number; pass a decimal/.test(bad ?? ""), String(bad));
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
