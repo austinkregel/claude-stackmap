@@ -247,6 +247,13 @@ other files.
 Declarations are parsed from every file matching `DECL_HINT`. `DECL_RE` is line-anchored so
 `Foo::class`, `self::class`, and docblock prose can't match.
 
+`src/php/literals.ts` is what `stackmap_xref` searches in a PHP project: a one-pass scanner that knows
+whether it is in code, a comment, or a string, so a literal in a comment is not reported as a use. What
+it steps over is counted and surfaced as a caveat — heredoc/nowdoc bodies and backtick shell-exec
+strings — and a hit inside an interpolated double-quoted string is marked, because its run-time text is
+not what is written. Numbers are compared by value (`literalValue`), so `416` and `0x1a0` find each
+other. Files are read per search, never cached: a search must see the code as it is now.
+
 ### Stack adapters: the seam for new languages
 
 `src/adapters/types.ts` defines `StackAdapter` (`resolveSymbol`, `resolutionTable`, `stats`),
