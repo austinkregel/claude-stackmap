@@ -5,9 +5,9 @@ import { readPsr4, symbolToFiles, type Psr4Map } from "../php/psr4.js";
 import { extractBindings, type Binding, type ContextualBinding, type SkippedCall } from "../php/bindings.js";
 import { extractDeclarations, type Declaration } from "../php/declarations.js";
 import { walkFiles } from "./walk.js";
+import { literalValue, scanLiterals } from "../php/literals.js";
 import type {
-  AdapterFactory, AdapterStats, Detection, EdgeKind, FileRef, IndexedAdapter, IndexRoot, ResolutionEdge, RootStats, StackAdapter, SymbolHit,
-} from "./types.js";
+  AdapterFactory, AdapterStats, Detection, EdgeKind, FileRef, IndexedAdapter, IndexRoot, ResolutionEdge, RootStats, StackAdapter, SymbolHit, SourceXrefHit } from "./types.js";
 
 const DEFAULT_INCLUDE = ["app", "bootstrap", "config", "routes"];
 const DEFAULT_EXCLUDE = ["vendor", "storage", "bootstrap/cache", "node_modules", "public"];
@@ -306,6 +306,83 @@ class LaravelAdapter implements StackAdapter {
     return out;
   }
 
+  /**
+   * Where a string or a number is written in this project's PHP, the source counterpart of an
+   * instruction operand. Files are read per search rather than cached: the binding table is built from
+   * the same files, and a search must see the code as it is now, not as it was when the table was built.
+   */
+  async findRefs(query: { constant?: string; string?: string; limit: number; context: number }): Promise<{ hits: SourceXrefHit[]; total: number; caveats: string[] }> {
+    const hits: SourceXrefHit[] = [];
+    const caveats: string[] = [];
+    let total = 0;
+    let heredocs = 0;
+    let shellExec = 0;
+    let interpolated = 0;
+    let scanned = 0;
+    const wanted = query.constant === undefined ? null : literalValue(query.constant.trim().replace(/^[+-]/, ""));
+    if (query.constant !== undefined && wanted === null) {
+      throw new Error(`stackmap_xref: "${query.constant}" is not a whole number; pass a decimal (416) or hex (0x1a0) constant.`);
+    }
+    const negative = query.constant?.trim().startsWith("-") ?? false;
+    const needle = query.string?.toLowerCase();
+
+    for (const s of this.ordered) {
+      if (s.error) continue;
+      const walk = walkFiles(s.root.path, s.include, s.exclude, ".php");
+      for (const rel of walk.files) {
+        const abs = join(s.root.path, rel);
+        if (this.ownerOf(abs) !== s) continue;
+        let src: string;
+        try {
+          src = readFileSync(abs, "utf8");
+        } catch {
+          caveats.push(`${toPosix(rel)} (${s.root.configured}) could not be read, so it was not searched.`);
+          continue;
+        }
+        scanned++;
+        const scan = scanLiterals(src);
+        heredocs += scan.heredocs;
+        shellExec += scan.shellExec;
+        let lines: string[] | null = null;
+        for (const lit of scan.literals) {
+          let via: string | null = null;
+          if (needle !== undefined && lit.kind === "string") {
+            const value = lit.value.toLowerCase();
+            if (value === needle) via = lit.interpolated ? "string literal (exact, interpolated)" : "string literal (exact)";
+            else if (value.includes(needle)) via = lit.interpolated ? "string literal (contains, interpolated)" : "string literal (contains)";
+            if (via && lit.interpolated) interpolated++;
+          }
+          if (wanted !== null && lit.kind === "number") {
+            const value = literalValue(lit.value);
+            if (value !== null && value === wanted) via = negative ? "number literal (the value negated in code)" : "number literal";
+          }
+          if (!via) continue;
+          total++;
+          if (hits.length >= query.limit) continue;
+          lines ??= src.split("\n");
+          const from = Math.max(1, lit.line - query.context);
+          const to = Math.min(lines.length, lit.line + query.context);
+          hits.push({
+            root: s.root.configured,
+            kind: lit.kind === "string" ? "string" : "constant",
+            matched: lit.raw,
+            value: lit.value,
+            file: toPosix(rel),
+            line: lit.line,
+            column: lit.column,
+            via,
+            context: Array.from({ length: to - from + 1 }, (_, i) => ({ line: from + i, text: lines![from + i - 1] ?? "" })),
+          });
+        }
+      }
+    }
+    caveats.push(`searched ${scanned} PHP file(s) in the directories this project scans; a value built at run time, or one outside them, is not among them.`);
+    if (heredocs > 0) caveats.push(`${heredocs} heredoc/nowdoc block(s) were stepped over rather than searched.`);
+    if (shellExec > 0) caveats.push(`${shellExec} backtick shell-exec string(s) were stepped over rather than searched.`);
+    if (interpolated > 0) caveats.push(`${interpolated} hit(s) are in an interpolated double-quoted string, so the text at run time is not what is written.`);
+    return { hits, total, caveats };
+  }
+
   stats(): AdapterStats {
     const b = this.build();
     const container = b.edges.filter((e) => e.kind === "container");
@@ -385,6 +462,8 @@ export const laravelFactory: AdapterFactory = {
     const adapter = new LaravelAdapter(states);
     // Laravel answers symbol resolution only; the compiled-program capabilities are the Ghidra
     // adapter's, and a tool that needs one fails naming this adapter rather than returning nothing.
-    return { id: adapter.id, stats: () => adapter.stats(), resolve: adapter, functions: null, types: null, xref: null };
+    // Laravel answers symbol resolution and literal search; functions and type layouts belong to a
+    // compiled program, and a tool that needs one fails naming this adapter rather than returning nothing.
+    return { id: adapter.id, stats: () => adapter.stats(), resolve: adapter, functions: null, types: null, xref: { findRefs: (q) => adapter.findRefs(q) } };
   },
 };
