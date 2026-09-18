@@ -17,6 +17,7 @@ A Claude Code plugin in five parts.
 | Stack | Detection | Resolution table | State |
 |---|---|---|---|
 | Laravel / PHP | `composer.json` `require` or `require-dev` lists `laravel/framework` or any `illuminate/*` package | container `bind`/`singleton`/`scoped`/`instance`, contextual `when`/`needs`/`give`, PHP `extends`/`implements` | **implemented** |
+| Ghidra (compiled programs) | a `.gpr` file in the root | — (functions, type layouts and references instead) | **implemented** |
 | Phoenix / Elixir | `mix.exs` | behaviours + app config + supervision trees | detected, not implemented |
 | Node / TS | `package.json` | — | detected, not implemented |
 
@@ -119,7 +120,7 @@ Each entry in `indexes` is a **project**:
 | `name` | Handle listed in `scope` in tool calls. Must be unique. |
 | `root` | The project's main root; it owns the index. `~` is expanded. |
 | `aliases` | Extra roots of the same project, each `{ "path", "include"?, "exclude"? }`. Every query searches every root. An alias without its own `include`/`exclude` inherits the project's. |
-| `adapter` | `auto` (detect from the root's package manifest), `laravel`, `phoenix`, `node`. Default `auto`. |
+| `adapter` | `auto` (detect from the root: a `.gpr` means `ghidra`, else the package manifest), `laravel`, `ghidra`, `phoenix`, `node`. Default `auto`. |
 | `include` | Directories scanned in each root. Laravel's default is `["app", "bootstrap", "config", "routes"]`. |
 | `exclude` | Extra directories to skip, merged with `globalExclude` and adapter defaults. A name skips that directory at any depth; a root-relative path containing `/` (like Laravel's default `bootstrap/cache`) skips that path. |
 | `options` | Per-adapter settings. Laravel accepts `bindingPaths` as an alias for `include`. |
@@ -225,6 +226,60 @@ Edge flags:
 - `inferredFrom` — the edge was derived, not written literally at the call site. Currently only
   from expanding a `foreach` over a class-const array declared in the same file.
 
+### `stackmap_get_function`
+`{ name | address, scope?, limit?, disassembly? }` → per project, the matching compiled functions from
+its Ghidra exports: `signature`, `pseudocode`, `callers`, `callees`, `data_refs`,
+`computed_calls_unresolved`, and `disassembly` when asked for. Each match names its `program` and
+`root`. `name` matches exactly first, then any name containing it; `address` accepts an entry or any
+address inside a body. A function whose pseudocode is missing carries `decompile` and
+`decompile_error`.
+
+### `stackmap_get_type`
+`{ name | path, scope?, limit?, depth? }` → a type's layout: `size`, `align`, `packing`, and `fields`
+with `offset`, `size`, `type`, and `bit_offset`/`bit_size` for bitfields. A by-value member carries its
+own `layout` up to `depth`. An anonymous union or struct has `name: null`, `anonymous: true`, and its
+members in `layout` at offsets relative to the containing type. A program with no PDB or DWARF says so
+instead of answering with nothing.
+
+### `stackmap_xref`
+`{ constant | string, scope?, limit?, context? }` → where a value is used, with surrounding
+disassembly:
+
+| `via` | What it means |
+|---|---|
+| `instruction operand` | a constant appears as an operand (decimal or hex, plus a negative value's two's complement) |
+| `reference (TYPE)` | an instruction references the string |
+| `pointer word (N bytes)` | a data word holds the string's address — one pointer hop, which is how PPC64 reaches a string with no direct reference |
+| `reference (TYPE) to the pointer word 0x…` | an instruction reads that word |
+
+A string is matched exactly first, then as a case-insensitive substring. Byte-pattern search is not
+offered, because an export carries instructions, strings, pointers and types, not raw memory.
+
+### Ghidra projects
+
+A root holding a `.gpr` is a Ghidra project directory, and each alias is another one. **stackmap never
+runs Ghidra.** You run the shipped export script yourself, read-only, and stackmap reads what it wrote:
+
+```bash
+analyzeHeadless <project dir> <project name> -process <program> -readOnly -noanalysis \
+  -scriptPath /path/to/stackmap/ghidra_scripts -postScript StackmapExport.java [decompile_timeout=60]
+```
+
+- **Where the export goes.** Beside the `.gpr`, in `<project name>.stackmap/<program>.json`, which is
+  where stackmap looks. One file per program; a project may hold several.
+- **What it holds.** Functions (signature, pseudocode or the reason there is none, callers, callees, data
+  references, unresolved computed calls), every instruction with its operands and references, strings —
+  including runs Ghidra never defined — data words that point at strings, type layouts, and memory
+  blocks.
+- **The index.** On first use stackmap builds `<export>.sqlite` beside the export by streaming it, and
+  rebuilds it whenever the export changes. A 201 MB export indexes in about 7 seconds.
+- **Staleness.** Each export records its program's database file. Saving that program in Ghidra makes
+  every later answer carry a stale caveat naming what changed; the answer still comes, because it is
+  evidence of what the project said. If the project can't be read, the caveat says freshness is unknown.
+- **`include`/`exclude` don't apply** to a Ghidra index and are refused: there is no source tree to scan.
+- **Ownership.** Ghidra refuses to open a project owned by another OS user, so the export must be run by
+  whoever owns it.
+
 ## Notes
 
 Notes are conclusions that outlive a session. Each one is a markdown file in `notesDir`; a typed note
@@ -259,7 +314,7 @@ Lists the shipped schemas with their version, description, and JSON Schema:
 
 | Schema | Shape |
 |---|---|
-| `struct_field_list@1` | `{ name, size, align (null when unknown), fields: [{ name, offset, size, type, bit_offset?, bit_size?, layout? }] }`, with offsets and sizes in bytes |
+| `struct_field_list@2` | `{ name, size, align (null when unknown), fields: [{ name, offset, size, type, bit_offset?, bit_size?, layout? }] }`, with offsets and sizes in bytes |
 | `offset_table@1` | `{ subject, base, entries: [{ name, offset (hex string like "0x1A0"), size? }] }` |
 | `algorithm_params@1` | `{ algorithm, variant, site, params: [{ name, value (string, number, boolean, or null) }] }` |
 
@@ -544,6 +599,16 @@ when set (it must be absolute).
   `globalExclude` or an adapter default exclude is not scanned, and a warning says so. The same
   contradiction within one entry's own lists is a config error. Include directories that don't
   exist, and ones that can't be read, are listed as warnings too.
+- **A Ghidra export is a snapshot, and only as good as the analysis behind it.** A function Ghidra never
+  found isn't in it, pseudocode reflects the project's state at export time (including any wrong
+  `noreturn` flags), and a program saved since is answered with a stale caveat rather than re-read.
+- **Pointer words are scanned in initialized, non-executable blocks only.** A pointer built at runtime,
+  or held in code, is not among them, and the caveats say so on every string search.
+- **No byte-pattern search for compiled programs.** An export carries instructions, strings, pointers
+  and types, not raw memory.
+- **A zero-length member is reported as such.** Ghidra can report a struct ending in a flexible array as
+  shorter than its debug info says (4 bytes in a PDB, 3 in Ghidra, measured), so that member carries a
+  caveat.
 - **Hex strings range as text.** `note_query` compares `"0x9"` above `"0x10"` and `"0xA"` below
   `"0xa"`. Zero-pad hex values to one width and one case if you'll filter them by range.
 - **Guards see the command, not what it runs.** `eval` strings, aliases, shell functions, scripts
@@ -572,6 +637,7 @@ npm run cli-test           # every sm subcommand: output, counts, --json, exit c
 npm run config-test        # config resolution, per-entry validation, scope, detection, roots, caching, add-index
 npm run extract-test       # PHP extractors + adapter wiring, including several roots, on inline fixtures
 npm run notes-test         # note store and file format, stamps across roots, typed notes, note_query, the data tokenizer
+npm run ghidra-test        # the export reader, the SQLite index, staleness, and the adapter, on inline fixtures
 npm run plans-test         # the plan store: config section, validation, nesting, ownership, closing
 npm run smoke              # every MCP tool over stdio on Laravel fixtures, including scope, aliases, plans, and failure paths
 ```
@@ -603,6 +669,7 @@ src/
   adapters/laravel.ts  Laravel adapter, across a project's roots
   adapters/registry.ts stack detection, root resolution, adapter caching, capability checks
   adapters/scope.ts    runs a query across the projects in scope, one outcome each
+  adapters/ghidra/     compiled programs: the export format, its streaming reader, the SQLite index, staleness, and the adapter
   adapters/walk.ts     directory walker honouring excludes, reporting what it couldn't walk
 scripts/
   hook-lib.mjs         hook wire protocol: deny, block, context, visible errors, state dir
@@ -623,6 +690,8 @@ scripts/
   launch               MCP server launcher (sh), with launch.cmd
   find-node.sh / find-node.cmd  node resolution for the sh / .cmd launchers
   cli/                 the sm CLI
+ghidra_scripts/
+  StackmapExport.java  the read-only export script you run in Ghidra; stackmap only reads its output
 agents/
   adversarial-auditor.md
 skills/
