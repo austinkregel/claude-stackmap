@@ -327,6 +327,18 @@ try {
       r = await call("stackmap_xref", { string: "SAVE.WAD", constant: "1", scope: ["binary"] });
       check("passing both a constant and a string is an error", r.isError && /pass exactly one of 'constant' or 'string'/.test(r.text), r.show);
 
+
+      // The same tool, answered by a source project in its own terms: literals, with file and line.
+      // 'EUR' is written as a literal in the provider; StripePayment is a class reference, not a literal.
+      r = await call("stackmap_xref", { string: "EUR", scope: ["fixture"], context: 1 });
+      const src = r.body?.results?.[0]?.value?.hits ?? [];
+      check("stackmap_xref finds a PHP string literal with its file, line and column",
+        src.some((h) => h.file === "app/Providers/AppServiceProvider.php" && h.line === 13 && h.column > 0 && h.via === "string literal (exact)" && h.matched === "'EUR'"), JSON.stringify(src));
+      check("…with the surrounding source lines, not disassembly",
+        src[0]?.context?.every((c) => typeof c.line === "number" && typeof c.text === "string"), JSON.stringify(src[0]?.context));
+      check("…and says how many PHP files were searched",
+        r.body?.results?.[0]?.value?.caveats?.some((c) => /searched \d+ PHP file\(s\)/.test(c)), r.show);
+
       // Capabilities are declared, so each tool refuses the project that lacks it, naming both.
       r = await call("stackmap_get_function", { name: "anything", scope: ["other"] });
       check("a Laravel project can't answer stackmap_get_function, and says which capability is missing",
