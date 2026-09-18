@@ -178,6 +178,24 @@ export interface XrefHit {
   context: Array<{ address: string; text: string }>;
 }
 
+/**
+ * A literal in source, the counterpart of a compiled program's instruction operand: where it is
+ * written rather than where it is loaded. A project answers with one kind or the other, never both.
+ */
+export interface SourceXrefHit {
+  root: string;
+  kind: "constant" | "string";
+  /** The literal as written, quotes and all. */
+  matched: string;
+  /** A string's decoded value, or the number's digits. */
+  value: string;
+  file: string;
+  line: number;
+  column: number;
+  via: string;
+  context: Array<{ line: number; text: string }>;
+}
+
 export interface FunctionLookup {
   getFunction(query: { name?: string; address?: string; limit: number; context: number }): Promise<{ matches: CompiledFunction[]; total: number; caveats: string[] }>;
 }
@@ -187,7 +205,7 @@ export interface TypeLookup {
 }
 
 export interface XrefSearch {
-  findRefs(query: { constant?: string; string?: string; limit: number; context: number }): Promise<{ hits: XrefHit[]; total: number; caveats: string[] }>;
+  findRefs(query: { constant?: string; string?: string; limit: number; context: number }): Promise<{ hits: Array<XrefHit | SourceXrefHit>; total: number; caveats: string[] }>;
 }
 
 /**
