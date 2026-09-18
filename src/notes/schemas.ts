@@ -18,8 +18,11 @@ const HEX = /^0x[0-9a-fA-F]+$/;
 export const NOTE_SCHEMAS: readonly NoteSchema[] = [
   {
     name: "struct_field_list",
-    version: 1,
-    description: "A type's layout: name, size and align (null when unknown), and fields {name, offset, size, type, bit_offset?, bit_size?, layout?}, recursing into by-value nested types. Offsets and sizes are byte counts.",
+    version: 2,
+    description:
+      "A type's layout: name, size and align (null when unknown), and fields {name, offset, size, type, bit_offset?, bit_size?, layout?}, recursing into by-value nested types. " +
+      "Offsets and sizes are byte counts. An anonymous union or struct member has name null and anonymous true, with its own members in layout, at offsets relative to the type containing it. " +
+      "This is the shape stackmap_get_type returns.",
     zod: TypeLayoutSchema,
   },
   {
