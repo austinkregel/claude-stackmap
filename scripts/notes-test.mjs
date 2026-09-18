@@ -48,7 +48,7 @@ const rescan = (store) => { store.dirty = true; };
 
 /** sha256 of each shipped schema's JSON Schema. A schema's shape may only change with a version bump. */
 const SCHEMA_FINGERPRINTS = {
-  "struct_field_list@1": "a2d773b2608e4a3559bd0b276cc1ef5042c00a05c185695bbd26282e5404e2ec",
+  "struct_field_list@2": "a932398ad76ef2954bff21dd652d35fde86d613088687376db647a10bafb5679",
   "offset_table@1": "d1d508385f30c3ba750f5ee02361195347fcaadb7a61674ebf19696e75678bb9",
   "algorithm_params@1": "91647733b81f5852293ac84c14d039500a29c4a0db78ed4dde5026953573f0e5",
 };
@@ -75,13 +75,13 @@ async function typedNotes() {
 
   console.log("\n-- typed notes: storage --");
   const w = noteWrite(store, { id: "header", title: "Header layout", body: "The save header.", schema: "struct_field_list", data: LAYOUT }, noProject);
-  check("a typed write names its data file, schema, and version", w.dataPath === join(typedDir, "header.json") && w.schema === "struct_field_list" && w.schemaVersion === 1, JSON.stringify(w));
+  check("a typed write names its data file, schema, and version", w.dataPath === join(typedDir, "header.json") && w.schema === "struct_field_list" && w.schemaVersion === 2, JSON.stringify(w));
   const dataBytes = readFileSync(join(typedDir, "header.json"));
   const onDisk = JSON.parse(dataBytes.toString("utf8"));
-  check("the data file holds {schema, version, data}", onDisk.schema === "struct_field_list" && onDisk.version === 1 && JSON.stringify(onDisk.data) === JSON.stringify(LAYOUT), JSON.stringify(onDisk));
+  check("the data file holds {schema, version, data}", onDisk.schema === "struct_field_list" && onDisk.version === 2 && JSON.stringify(onDisk.data) === JSON.stringify(LAYOUT), JSON.stringify(onDisk));
   const md = readFileSync(join(typedDir, "header.md"), "utf8");
-  check("the note records the schema, version, and the data file's sha256", md.includes('schema: "struct_field_list"') && md.includes("schema_version: 1") && md.includes(`data_sha256: "${sha(dataBytes)}"`), md);
-  check("the record round-trips exactly", JSON.stringify(store.get("header").record) === JSON.stringify({ schema: "struct_field_list", version: 1, data: LAYOUT }));
+  check("the note records the schema, version, and the data file's sha256", md.includes('schema: "struct_field_list"') && md.includes("schema_version: 2") && md.includes(`data_sha256: "${sha(dataBytes)}"`), md);
+  check("the record round-trips exactly", JSON.stringify(store.get("header").record) === JSON.stringify({ schema: "struct_field_list", version: 2, data: LAYOUT }));
   check("no temporary files are left behind", readdirSync(typedDir).every((f) => f.endsWith(".md") || f.endsWith(".json")), readdirSync(typedDir).join());
   check("note_get reports the record valid", noteGet(store, { id: "header" }, noProject).validation?.valid === true);
 
@@ -124,13 +124,14 @@ async function typedNotes() {
   t = throws(() => noteWrite(store, { title: "extra key", body: "x", schema: "algorithm_params", data: { ...CRC, notes: "no" } }, noProject), /does not validate against algorithm_params@1/);
   check("a key the schema doesn't declare is invalid", t.ok, t.detail);
   check("…and nothing is written for invalid data", !existsSync(join(typedDir, "bad-offsets.md")) && !existsSync(join(typedDir, "extra-key.json")));
+
   noteWrite(store, { id: "crc", title: "Checksum", body: "The save checksum.", schema: "algorithm_params", data: CRC, repo: "fuel" }, noProject);
   noteWrite(store, { id: "crc-wrong", title: "Checksum guess", body: "Wrong guess.", schema: "algorithm_params", data: { ...CRC, variant: "normal" }, status: "retracted" }, noProject);
   noteWrite(store, { id: "adler", title: "Other checksum", body: "In another project.", schema: "algorithm_params", data: { algorithm: "adler32", variant: "zlib", site: "0x00402000", params: [] }, repo: "other" }, noProject);
 
   console.log("\n-- note_schemas --");
   const listed = noteSchemas().schemas;
-  check("note_schemas lists all three with their JSON Schema", listed.map((s) => `${s.name}@${s.version}`).join() === "struct_field_list@1,offset_table@1,algorithm_params@1" && listed.every((s) => s.jsonSchema?.type === "object" && s.description), JSON.stringify(listed.map((s) => s.name)));
+  check("note_schemas lists all three with their JSON Schema", listed.map((s) => `${s.name}@${s.version}`).join() === "struct_field_list@2,offset_table@1,algorithm_params@1" && listed.every((s) => s.jsonSchema?.type === "object" && s.description), JSON.stringify(listed.map((s) => s.name)));
   for (const s of NOTE_SCHEMAS) {
     const key = `${s.name}@${s.version}`;
     const actual = sha(JSON.stringify(schemaJson(s)));
@@ -205,7 +206,7 @@ async function typedNotes() {
 
   console.log("\n-- note_query: rejected filters --");
   const rejects = [
-    ["an unknown field names the valid ones", S, all(cond("fields[].typo", "EQUAL", "x")), /no field "typo" at fields\[\]\. Valid: name, offset, size, type, bit_offset, bit_size, layout/],
+    ["an unknown field names the valid ones", S, all(cond("fields[].typo", "EQUAL", "x")), /no field "typo" at fields\[\]\. Valid: name, anonymous, offset, size, type, bit_offset, bit_size, layout/],
     ["[] on a field that isn't a list", S, all(cond("name[]", "EXISTS")), /name is not a list, so it can't take \[\]/],
     ["walking into a list without []", S, all(cond("fields.type", "EXISTS")), /fields is not an object with fields/],
     ["walking into a scalar", S, all(cond("name.first", "EXISTS")), /name is not an object with fields/],
@@ -253,6 +254,21 @@ async function typedNotes() {
   for (const f of ["old-version", "hand-edited", "retired"]) for (const ext of [".md", ".json"]) rmSync(join(typedDir, `${f}${ext}`));
   rmSync(join(typedDir, "stray.json"));
   rescan(store);
+
+  // struct_field_list@2: an anonymous union member has no name, and carries its own layout.
+  const ANON = {
+    name: "Slot", size: 8, align: 4,
+    fields: [
+      { name: "kind", offset: 0, size: 4, type: "u32" },
+      { name: null, anonymous: true, offset: 4, size: 4, type: "Value", layout: { name: "Value", size: 4, align: 4, fields: [{ name: "index", offset: 0, size: 4, type: "u32" }] } },
+    ],
+  };
+  const anon = noteWrite(store, { id: "slot", title: "Slot layout", body: "An anonymous union member.", schema: "struct_field_list", data: ANON }, noProject);
+  check("a layout with an anonymous member is stored under struct_field_list@2", anon.schemaVersion === 2 && JSON.stringify(store.get("slot").record.data) === JSON.stringify(ANON), JSON.stringify(anon));
+  check("…and is found by a filter on the anonymous flag",
+    noteQuery(store, { schema: "struct_field_list", filter: { operator: "and", conditions: [{ parameter: "fields[].anonymous", comparator: "EQUAL", value: true }] } }, noProject).records.map((r) => r.id).join() === "slot");
+  t = throws(() => noteWrite(store, { title: "empty name", body: "x", schema: "struct_field_list", data: { ...ANON, fields: [{ name: "", offset: 0, size: 4, type: "u32" }] } }, noProject), /does not validate against struct_field_list@2/);
+  check("an empty field name is still refused", t.ok, t.detail);
 
   console.log("\n-- data tokenizer --");
   const tok = (text, expected) => {
