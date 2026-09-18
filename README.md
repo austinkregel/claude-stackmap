@@ -252,6 +252,17 @@ disassembly:
 | `pointer word (N bytes)` | a data word holds the string's address — one pointer hop, which is how PPC64 reaches a string with no direct reference |
 | `reference (TYPE) to the pointer word 0x…` | an instruction reads that word |
 
+A **PHP project** answers the same tool from its source instead, with `file`, `line` and `column`:
+
+| `via` | What it means |
+|---|---|
+| `string literal (exact)` / `(contains)` | a quoted string, matched whole or as a substring |
+| `… (interpolated)` | the literal interpolates (`"$name"`), so its run-time text isn't what is written |
+| `number literal` | a number in any base PHP writes — `416`, `0x1a0`, `0b1101`, `0o777`, `0755` — compared by value |
+
+A literal inside a comment is not a use. Heredoc bodies and backtick strings are stepped over, and the
+caveats say how many, alongside how many files were searched.
+
 A string is matched exactly first, then as a case-insensitive substring. Byte-pattern search is not
 offered, because an export carries instructions, strings, pointers and types, not raw memory.
 
@@ -665,6 +676,7 @@ src/
   php/uses.ts          namespace + use-statement parsing, short-name expansion
   php/bindings.ts      container + contextual binding extraction
   php/declarations.ts  class/interface/trait/enum declarations and their extends/implements
+  php/literals.ts      string and number literals, with where each is written (what a source xref searches)
   adapters/types.ts    StackAdapter, IndexedAdapter capabilities, roots and file refs — the seam new stacks implement
   adapters/laravel.ts  Laravel adapter, across a project's roots
   adapters/registry.ts stack detection, root resolution, adapter caching, capability checks
