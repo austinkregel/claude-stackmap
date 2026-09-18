@@ -305,19 +305,21 @@ const TOOLS = [
   {
     name: "stackmap_xref",
     description:
-      "Find where a constant or a string is used in a Ghidra project's export, with the surrounding disassembly. " +
+      "Find where a constant or a string is used, with the surrounding disassembly or source lines. Each project in scope answers in its own terms: " +
+      "a Ghidra project from its export's instruction operands, strings and pointers; a PHP project from the string and number literals written in the source it scans (with file, line and column). " +
       "A string is matched exactly first, then as a case-insensitive substring, and is reached three ways: a reference to it, a data word holding its address (one pointer hop, which is how PPC64 reaches a string with no direct reference), and a reference to that word. " +
       "A constant is matched against instruction operands, in decimal or hex, including a negative value's two's complement. " +
+      "In PHP, a literal in a comment is not a use, heredoc bodies and backtick strings are stepped over and counted, and a hit inside an interpolated string says so. " +
       "Byte-pattern search is not offered: an export carries instructions, strings, pointers and types, not raw memory (user decision). " +
-      "The caveats state the pointer scan's blind spots.",
+      "The caveats state each search's blind spots.",
     inputSchema: {
       type: "object",
       properties: {
         ...SCOPE_ARG,
-        constant: { type: "string", description: "A number in decimal (416) or hex (0x1a0). Pass this or 'string', not both." },
-        string: { type: "string", description: "Text to look for among the program's strings, defined or not." },
+        constant: { type: "string", description: "A number in decimal (416) or hex (0x1a0); the same value is found however each project writes it. Pass this or 'string', not both." },
+        string: { type: "string", description: "Text to look for: an exact match first, then any string containing it, case-insensitively." },
         limit: { type: "number", description: "Max hits per project (default 50)." },
-        context: { type: "number", description: "Instructions of context on each side of a hit (default 2)." },
+        context: { type: "number", description: "Instructions or source lines of context on each side of a hit (default 2)." },
       },
       additionalProperties: false,
     },
