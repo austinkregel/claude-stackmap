@@ -28,6 +28,17 @@
       "root": "~/src/legacy-app",
       "adapter": "auto",
       "enabled": false
+    },
+    {
+      "name": "game-binaries",
+      "root": "~/re/ghidra-projects",
+      "adapter": "ghidra",
+      "enabled": false,
+      "aliases": [
+        {
+          "path": "~/re/console-project"
+        }
+      ]
     }
   ],
   "guard": {
