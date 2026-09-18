@@ -272,7 +272,7 @@ try {
     check("note_schemas lists the three shipped schemas with their JSON Schema", r.body?.schemas?.map((s) => s.name).join() === "struct_field_list,offset_table,algorithm_params" && r.body.schemas.every((s) => s.jsonSchema?.type === "object"), r.show);
     const layout = { name: "Header", size: 8, align: 4, fields: [{ name: "magic", offset: 0, size: 4, type: "u32" }, { name: "flags", offset: 4, size: 4, type: "uint32_t" }] };
     r = await call("note_write", { title: "Header layout", body: "The save header.", schema: "struct_field_list", data: layout, repo: "fixture", verified_on: "2026-09-14" });
-    check("note_write stores a typed record beside the note", r.body?.written === "header-layout" && r.body?.schema === "struct_field_list" && r.body?.schemaVersion === 1 && JSON.parse(readFileSync(r.body.dataPath, "utf8")).data.fields.length === 2, r.show);
+    check("note_write stores a typed record beside the note", r.body?.written === "header-layout" && r.body?.schema === "struct_field_list" && r.body?.schemaVersion === 2 && JSON.parse(readFileSync(r.body.dataPath, "utf8")).data.fields.length === 2, r.show);
     r = await call("note_query", { schema: "struct_field_list", filter: { operator: "and", conditions: [{ parameter: "fields[].type", comparator: "STARTS_WITH", value: "UINT" }] } });
     check("note_query finds it by any element, case-insensitively, with its data as stored", r.body?.matched === 1 && JSON.stringify(r.body.records[0].data) === JSON.stringify(layout) && r.body.invalid?.length === 0 && r.body.malformedFiles?.length === 0, r.show);
     r = await call("note_search", { query: "u32" });
