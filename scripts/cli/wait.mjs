@@ -29,7 +29,11 @@ export async function wait(argv) {
     attempts++;
     let out = "", ok = true;
     try {
-      out = execSync(String(cmd), { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: every });
+      // One attempt may run for the whole remaining budget. `every` is the gap BETWEEN attempts,
+      // never a cap on one attempt: capping at `every` killed any command slower than the poll
+      // interval, so it could never succeed however long --timeout was.
+      const left = Math.max(1, timeout - (Date.now() - started));
+      out = execSync(String(cmd), { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: left });
     } catch (err) {
       ok = false;
       out = `${err.stdout ?? ""}${err.stderr ?? ""}`;
