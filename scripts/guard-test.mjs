@@ -80,7 +80,9 @@ try {
   check("commit while HEAD is on develop", BLOCK, bash("git commit -m wip", repo));
   check("implicit push while on develop", BLOCK, bash("git push", repo));
   check("push -u origin (one positional) while on develop is implicit", BLOCK, bash("git push -u origin", repo));
-  check("git -C <repo> commit uses that repo's branch", BLOCK, bash(`git -C ${repo} commit -m wip`, sandbox));
+  // The path is quoted because a Windows sandbox path is `C:\…`, and the shell parser strips
+  // unquoted backslashes exactly as a shell does, leaving a path that resolves to no repo.
+  check("git -C <repo> commit uses that repo's branch", BLOCK, bash(`git -C '${repo}' commit -m wip`, sandbox));
   check("git -C \"$DIR\" status does not need the directory, so it passes", ALLOW, bash('git -C "$DIR" status'));
   check("git -C \"$DIR\" commit needs the branch, so it fails closed", BLOCK, bash('git -C "$DIR" commit -m wip'), { reason: /branch is unknown/ });
   execFileSync("git", ["-C", repo, "checkout", "-q", "-b", "feature/x"]);
